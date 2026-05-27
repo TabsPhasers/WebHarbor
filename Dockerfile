@@ -1,5 +1,5 @@
 # WebHarbor — slim, self-contained image.
-# 21 Flask mirror sites + control plane on :8101.
+# 22 Flask mirror sites + control plane on :8101.
 
 FROM python:3.12-slim-bookworm
 
@@ -51,6 +51,6 @@ os.makedirs('instance_seed', exist_ok=True); \
 shutil.copy2('instance/osu.db', 'instance_seed/osu.db'); \
 print('osu seed DB generated at build time.')" && rm -rf /opt/WebSyn/osu/instance
 
-EXPOSE 8101 40000-40020
+EXPOSE 8101 40000-40021
 
 CMD ["/opt/websyn_start.sh"]
