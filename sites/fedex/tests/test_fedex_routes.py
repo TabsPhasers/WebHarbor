@@ -79,7 +79,16 @@ class FedExRouteTests(unittest.TestCase):
 
         trajectory = {
             "task_id": "FedEx--3",
-            "steps": [{"url": f"http://localhost:40016{response.location}"}],
+            "steps": [
+                {
+                    "url": "http://localhost:40016/rate-estimate",
+                    "action": "click",
+                    "action_result": {
+                        "success": True,
+                        "url_after": f"http://localhost:40016{response.location}",
+                    },
+                }
+            ],
             "final_answer": "FedEx Ground Home Delivery is cheapest at $37.40.",
         }
         with tempfile.TemporaryDirectory() as run_dir:

@@ -80,17 +80,24 @@ def final_answer(trajectory: dict) -> str:
 def quote_request_matches(trajectory: dict, expected: QuoteRequest) -> tuple[bool, str]:
     candidates: list[QuoteRequest] = []
     for step in trajectory.get("steps", []):
-        urls = [str(step.get("url", "")), str((step.get("action_result") or {}).get("url_after", ""))]
-        for url in urls:
-            parsed = urlparse(url)
-            if parsed.path != "/rate-estimate":
-                continue
-            token = parse_qs(parsed.query).get("quote", [""])[0]
-            candidate = verify_quote_token(token)
-            if candidate is not None:
-                candidates.append(candidate)
+        action_result = step.get("action_result") or {}
+        before = urlparse(str(step.get("url", "")))
+        after = urlparse(str(action_result.get("url_after", "")))
+        is_successful_submit = (
+            str(step.get("action", "")).casefold() == "click"
+            and action_result.get("success") is True
+            and before.path == "/rate-estimate"
+            and not parse_qs(before.query).get("quote")
+            and after.path == "/rate-estimate"
+        )
+        if not is_successful_submit:
+            continue
+        token = parse_qs(after.query).get("quote", [""])[0]
+        candidate = verify_quote_token(token)
+        if candidate is not None:
+            candidates.append(candidate)
     matched = expected in candidates
-    return matched, f"expected={expected!r}; signed_requests={candidates!r}"
+    return matched, f"expected={expected!r}; successful_signed_submissions={candidates!r}"
 
 
 def answer_contains(answer: str, alternative: str) -> bool:

@@ -11,7 +11,9 @@ from pathlib import Path
 SITE_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = SITE_ROOT.parents[1]
 sys.path.insert(0, str(SITE_ROOT / "verify"))
+sys.path.insert(0, str(SITE_ROOT))
 
+from rate_quote import QuoteRequest, issue_quote_token  # noqa: E402
 from verify_lib import TASK_SPECS, answer_contains, semantic_answer_matches  # noqa: E402
 
 
@@ -178,6 +180,37 @@ class FedExTaskContractTests(unittest.TestCase):
             }
             completed = self.run_verifier(index, trajectory)
             self.assertEqual(1, completed.returncode, f"FedEx--{index}: {completed.stdout}")
+
+    def test_replayed_signed_quote_without_a_successful_form_submit_is_rejected(self) -> None:
+        token = issue_quote_token(QuoteRequest("CA", "TX", 8, "Box"))
+        quote_url = f"http://localhost:40016/rate-estimate?quote={token}"
+        trajectories = (
+            {
+                "task_id": "FedEx--3",
+                "steps": [
+                    {
+                        "url": "http://localhost:40016/rate-estimate",
+                        "action": "navigate",
+                        "action_result": {"success": True, "url_after": quote_url},
+                    }
+                ],
+                "final_answer": "FedEx Ground Home Delivery is cheapest at $37.40.",
+            },
+            {
+                "task_id": "FedEx--3",
+                "steps": [
+                    {
+                        "url": quote_url,
+                        "action": "click",
+                        "action_result": {"success": False, "url_after": quote_url},
+                    }
+                ],
+                "final_answer": "FedEx Ground Home Delivery is cheapest at $37.40.",
+            },
+        )
+        for trajectory in trajectories:
+            completed = self.run_verifier(3, trajectory)
+            self.assertEqual(1, completed.returncode, completed.stdout)
 
     def test_equivalent_hour_formats_are_accepted(self) -> None:
         cases = {
