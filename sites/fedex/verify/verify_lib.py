@@ -14,6 +14,13 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
+from urllib.parse import parse_qs, urlparse
+
+
+SITE_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(SITE_ROOT))
+
+from rate_quote import QuoteRequest, verify_quote_token  # noqa: E402
 
 
 SITE = "fedex"
@@ -33,6 +40,7 @@ class TaskSpec:
     required_paths: tuple[str, ...]
     answer_groups: tuple[tuple[str, ...], ...]
     state_check: Callable[[VerifyArgs], tuple[bool, str]] | None = None
+    quote_request: QuoteRequest | None = None
 
 
 def parse_args() -> VerifyArgs:
@@ -67,6 +75,22 @@ def navigated_to(trajectory: dict, path_fragment: str) -> bool:
 
 def final_answer(trajectory: dict) -> str:
     return str(trajectory.get("final_answer") or "").strip()
+
+
+def quote_request_matches(trajectory: dict, expected: QuoteRequest) -> tuple[bool, str]:
+    candidates: list[QuoteRequest] = []
+    for step in trajectory.get("steps", []):
+        urls = [str(step.get("url", "")), str((step.get("action_result") or {}).get("url_after", ""))]
+        for url in urls:
+            parsed = urlparse(url)
+            if parsed.path != "/rate-estimate":
+                continue
+            token = parse_qs(parsed.query).get("quote", [""])[0]
+            candidate = verify_quote_token(token)
+            if candidate is not None:
+                candidates.append(candidate)
+    matched = expected in candidates
+    return matched, f"expected={expected!r}; signed_requests={candidates!r}"
 
 
 def answer_contains(answer: str, alternative: str) -> bool:
@@ -168,21 +192,46 @@ TASK_SPECS: dict[int, TaskSpec] = {
     0: TaskSpec(("/track/results", "/tracking/FDX260000004"), (("los angeles",), ("weather",))),
     1: TaskSpec(("/track/results", "/tracking/FDX260000001"), (("fdx260000001",), ("delivered",), ("required", "yes"))),
     2: TaskSpec(("/support?q=tracking", "/support/shipment-exception-status"), (("demo workflow",), ("tracking help",))),
-    3: TaskSpec(("/rate-estimate",), (("fedex ground home delivery",), ("$37.40", "37.4"))),
-    4: TaskSpec(("/rate-estimate",), (("fedex priority overnight",), ("fedex ground home delivery",), ("$43.80", "43.8"))),
+    3: TaskSpec(
+        ("/rate-estimate",),
+        (("fedex ground home delivery",), ("$37.40", "37.4")),
+        quote_request=QuoteRequest("CA", "TX", 8, "Box"),
+    ),
+    4: TaskSpec(
+        ("/rate-estimate",),
+        (("fedex priority overnight",), ("fedex ground home delivery",), ("$43.80", "43.8")),
+        quote_request=QuoteRequest("WA", "FL", 4, "Envelope"),
+    ),
     5: TaskSpec(("/login", "/account/shipments", "/invoices"), (("inv-260001",),)),
     6: TaskSpec(("/login", "/claims"), (("clm-2623",), ("fdx260000023",))),
-    7: TaskSpec(("/login", "/account"), (("pu-2621",), ("9:00 am", "9 am"), ("11:00 am", "11 am"))),
+    7: TaskSpec(
+        ("/login", "/account"),
+        (
+            ("pu-2621",),
+            ("9:00 am", "9 am", "9:00 a.m.", "9 a.m.", "9am"),
+            ("11:00 am", "11 am", "11:00 a.m.", "11 a.m.", "11am"),
+        ),
+    ),
     8: TaskSpec(("/login", "/account/shipments"), (("sh-260050",), ("charlotte",), ("sh-260055",), ("los angeles",), ("sh-260060",), ("seattle",))),
     9: TaskSpec(("/locations", "/locations/dallas-arts-tx"), (("freight cutoff",), ("4:45 pm",))),
     10: TaskSpec(("/locations", "/locations/miami-brickell-fl"), (("international docs",), ("5:45 pm",))),
     11: TaskSpec(("/search", "/support/weather-delay-guidance"), (("tracking",), ("billing",), ("pickup",))),
     12: TaskSpec(("/login", "/ship", "/ship/service", "/ship/review", "/ship/confirmation"), (("fdx260000061",),), shipment_state_matches),
     13: TaskSpec(("/login", "/pickup", "/account"), (("pu-2609",),), pickup_state_matches),
-    14: TaskSpec(("/search", "/locations/seattle-downtown-wa"), (("7:00 am", "7 am"), ("9:00 pm", "9 pm"))),
+    14: TaskSpec(
+        ("/search", "/locations/seattle-downtown-wa"),
+        (
+            ("7:00 am", "7 am", "7:00 a.m.", "7 a.m.", "7am"),
+            ("9:00 pm", "9 pm", "9:00 p.m.", "9 p.m.", "9pm"),
+        ),
+    ),
     15: TaskSpec(("/login", "/claims"), (("clm-2653",), ("fdx260000053",))),
     16: TaskSpec(("/track/results", "/tracking/FDX260000500"), (("delivered",), ("los angeles",), ("ca", "california"))),
-    17: TaskSpec(("/rate-estimate",), (("fedex freight economy",), ("$191.40", "191.4"))),
+    17: TaskSpec(
+        ("/rate-estimate",),
+        (("fedex freight economy",), ("$191.40", "191.4")),
+        quote_request=QuoteRequest("TX", "FL", 12, "Freight pallet"),
+    ),
 }
 
 
@@ -206,6 +255,12 @@ def _negates(answer: str, phrase: str) -> bool:
         re.search(rf"\b(?:not|never|no)\b.{{0,24}}{phrase_pattern}", text)
         or re.search(rf"\b(?:isn't|isnt|wasn't|wasnt)\b.{{0,12}}{phrase_pattern}", text)
     )
+
+
+def _mentions_hour(answer: str, hour: int, meridiem: str) -> bool:
+    suffix = meridiem.casefold()
+    pattern = rf"(?<!\d)0?{hour}(?::00)?\s*{suffix[0]}\.?\s*{suffix[1]}\.?(?![a-z0-9])"
+    return bool(re.search(pattern, normalized(answer)))
 
 
 def semantic_answer_matches(index: int, answer: str) -> bool:
@@ -248,7 +303,7 @@ def semantic_answer_matches(index: int, answer: str) -> bool:
     if index == 6:
         return _codes(answer, "CLM") == {"CLM-2623"} and _codes(answer, "FDX") == {"FDX260000023"}
     if index == 7:
-        return _codes(answer, "PU") == {"PU-2621"} and answer_contains(answer, "9:00 am") and answer_contains(answer, "11:00 am")
+        return _codes(answer, "PU") == {"PU-2621"} and _mentions_hour(answer, 9, "am") and _mentions_hour(answer, 11, "am")
     if index == 8:
         expected_codes = {"SH-260050", "SH-260055", "SH-260060"}
         pairings = (("sh-260050", "charlotte"), ("sh-260055", "los angeles"), ("sh-260060", "seattle"))
@@ -267,7 +322,7 @@ def semantic_answer_matches(index: int, answer: str) -> bool:
     if index == 13:
         return _codes(answer, "PU") == {"PU-2609"} and not _negates(answer, "pu-2609")
     if index == 14:
-        return answer_contains(answer, "7:00 am") and answer_contains(answer, "9:00 pm")
+        return _mentions_hour(answer, 7, "am") and _mentions_hour(answer, 9, "pm")
     if index == 15:
         return _codes(answer, "CLM") == {"CLM-2653"} and _codes(answer, "FDX") == {"FDX260000053"}
     if index == 16:
@@ -300,6 +355,9 @@ def run_task(index: int) -> None:
     for required_path in spec.required_paths:
         judge.check(f"navigated_{required_path}", navigated_to(trajectory, required_path), f"required_path={required_path}")
     judge.check("non_empty_answer", bool(answer), f"final={answer!r}")
+    if spec.quote_request:
+        matched, evidence = quote_request_matches(trajectory, spec.quote_request)
+        judge.check("submitted_requested_quote", matched, evidence)
     for group_number, alternatives in enumerate(spec.answer_groups, start=1):
         matched = any(answer_contains(answer, alternative) for alternative in alternatives)
         judge.check(f"answer_fact_{group_number}", matched, f"accepted_alternatives={alternatives!r}; final={answer!r}")

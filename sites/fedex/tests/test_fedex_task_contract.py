@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -21,6 +23,23 @@ class FedExTaskContractTests(unittest.TestCase):
             for line in (SITE_ROOT / "tasks.jsonl").read_text().splitlines()
             if line.strip()
         ]
+
+    def run_verifier(self, index: int, trajectory: dict) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as run_dir:
+            (Path(run_dir) / "trajectory.json").write_text(json.dumps(trajectory))
+            return subprocess.run(
+                [
+                    sys.executable,
+                    str(SITE_ROOT / "verify" / f"verify_{index}.py"),
+                    "--run_dir",
+                    run_dir,
+                    "--no_llm",
+                    "true",
+                ],
+                cwd=REPOSITORY_ROOT,
+                capture_output=True,
+                text=True,
+            )
 
     def test_all_eighteen_tasks_have_one_verifier_and_one_rubric(self) -> None:
         self.assertEqual(len(self.tasks), 18)
@@ -144,6 +163,80 @@ class FedExTaskContractTests(unittest.TestCase):
         }
         for index, answer in adversarial_answers.items():
             self.assertFalse(semantic_answer_matches(index, answer), f"FedEx--{index}: {answer}")
+
+    def test_quote_answer_without_submitting_requested_inputs_is_rejected(self) -> None:
+        known_answers = {
+            3: "FedEx Ground Home Delivery is cheapest at $37.40.",
+            4: "The fastest is FedEx Priority Overnight; the cheapest is FedEx Ground Home Delivery; the difference is $43.80.",
+            17: "FedEx Freight Economy is most expensive at $191.40.",
+        }
+        for index, answer in known_answers.items():
+            trajectory = {
+                "task_id": f"FedEx--{index}",
+                "steps": [{"url": "http://localhost:40016/rate-estimate"}],
+                "final_answer": answer,
+            }
+            completed = self.run_verifier(index, trajectory)
+            self.assertEqual(1, completed.returncode, f"FedEx--{index}: {completed.stdout}")
+
+    def test_equivalent_hour_formats_are_accepted(self) -> None:
+        cases = {
+            7: (["/login", "/account"], "PU-2621, 9 a.m.–11 a.m."),
+            14: (["/search", "/locations/seattle-downtown-wa"], "7 a.m.–9 p.m."),
+        }
+        for index, (paths, answer) in cases.items():
+            trajectory = {
+                "task_id": f"FedEx--{index}",
+                "steps": [{"url": f"http://localhost:40016{path}"} for path in paths],
+                "final_answer": answer,
+            }
+            completed = self.run_verifier(index, trajectory)
+            self.assertEqual(0, completed.returncode, f"FedEx--{index}: {completed.stdout}")
+
+    def test_quote_fields_filled_after_an_unrelated_click_are_not_treated_as_submitted(self) -> None:
+        trajectory = {
+            "task_id": "FedEx--3",
+            "steps": [
+                {"url": "http://localhost:40016/rate-estimate", "action": "select", "params": {"value": "CA"}},
+                {"url": "http://localhost:40016/rate-estimate", "action": "click", "params": {"index": 1}},
+                {"url": "http://localhost:40016/rate-estimate", "action": "select", "params": {"value": "TX"}},
+                {"url": "http://localhost:40016/rate-estimate", "action": "input", "params": {"text": "8"}},
+                {"url": "http://localhost:40016/rate-estimate", "action": "select", "params": {"value": "Box"}},
+            ],
+            "final_answer": "FedEx Ground Home Delivery is cheapest at $37.40.",
+        }
+        completed = self.run_verifier(3, trajectory)
+        self.assertEqual(1, completed.returncode, completed.stdout)
+
+    def test_values_typed_into_arbitrary_fields_do_not_count_as_a_quote_submission(self) -> None:
+        cases = {
+            3: (["CA", "TX", "8", "Box"], "FedEx Ground Home Delivery is cheapest at $37.40."),
+            4: (["WA", "FL", "4", "Envelope"], "The fastest is FedEx Priority Overnight; the cheapest is FedEx Ground Home Delivery; the difference is $43.80."),
+            17: (["TX", "FL", "12", "Freight pallet"], "FedEx Freight Economy is most expensive at $191.40."),
+        }
+        for index, (values, answer) in cases.items():
+            steps = [
+                {
+                    "url": "http://localhost:40016/rate-estimate",
+                    "action": "input",
+                    "params": {"index": position, "text": value},
+                }
+                for position, value in enumerate(values, start=1)
+            ]
+            steps.append(
+                {
+                    "url": "http://localhost:40016/rate-estimate",
+                    "action": "click",
+                    "params": {"index": 5},
+                }
+            )
+            trajectory = {
+                "task_id": f"FedEx--{index}",
+                "steps": steps,
+                "final_answer": answer,
+            }
+            completed = self.run_verifier(index, trajectory)
+            self.assertEqual(1, completed.returncode, f"FedEx--{index}: {completed.stdout}")
 
 
 if __name__ == "__main__":

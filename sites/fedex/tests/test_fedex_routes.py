@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 import subprocess
 import sys
@@ -58,6 +59,45 @@ class FedExRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Enter a weight greater than 0", response.data)
+
+    def test_submitted_quote_produces_verifiable_result_url(self) -> None:
+        response = self.client.post(
+            "/rate-estimate",
+            data={
+                "origin_state": "CA",
+                "destination_state": "TX",
+                "weight_lb": "8",
+                "package_type": "Box",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertRegex(response.location, r"^/rate-estimate\?quote=[A-Za-z0-9_.-]+$")
+        result = self.client.get(response.location)
+        self.assertIn(b"FedEx Ground Home Delivery", result.data)
+        self.assertIn(b"$37.40", result.data)
+
+        trajectory = {
+            "task_id": "FedEx--3",
+            "steps": [{"url": f"http://localhost:40016{response.location}"}],
+            "final_answer": "FedEx Ground Home Delivery is cheapest at $37.40.",
+        }
+        with tempfile.TemporaryDirectory() as run_dir:
+            (Path(run_dir) / "trajectory.json").write_text(json.dumps(trajectory))
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(SITE_ROOT / "verify" / "verify_3.py"),
+                    "--run_dir",
+                    run_dir,
+                    "--no_llm",
+                    "true",
+                ],
+                cwd=SITE_ROOT.parents[1],
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(0, completed.returncode, completed.stdout)
 
     def test_ship_rejects_invalid_numeric_values_without_server_error(self) -> None:
         self.client.post(

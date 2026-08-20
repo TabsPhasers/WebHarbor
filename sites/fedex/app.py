@@ -28,6 +28,8 @@ from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import or_
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from rate_quote import QuoteRequest, issue_quote_token, verify_quote_token
+
 BASE_DIR = Path(__file__).resolve().parent
 INSTANCE_DIR = BASE_DIR / "instance"
 DB_PATH = INSTANCE_DIR / "fedex.db"
@@ -434,7 +436,24 @@ def rate_estimate():
         "weight_lb": request.values.get("weight_lb", "8"),
         "package_type": request.values.get("package_type", "Box"),
     }
-    if request.method == "POST":
+    if request.method == "GET" and request.args.get("quote"):
+        quote_request = verify_quote_token(request.args["quote"])
+        if quote_request is None:
+            flash("That rate estimate link is invalid. Submit the form again.", "danger")
+        else:
+            form_state = {
+                "origin_state": quote_request.origin_state,
+                "destination_state": quote_request.destination_state,
+                "weight_lb": f"{quote_request.weight_lb:g}",
+                "package_type": quote_request.package_type,
+            }
+            quotes = build_rate_quotes(
+                quote_request.origin_state,
+                quote_request.destination_state,
+                quote_request.weight_lb,
+                quote_request.package_type,
+            )
+    elif request.method == "POST":
         try:
             weight = float(form_state["weight_lb"])
             if weight <= 0:
@@ -442,12 +461,13 @@ def rate_estimate():
         except (TypeError, ValueError):
             flash("Enter a weight greater than 0.", "danger")
         else:
-            quotes = build_rate_quotes(
-                form_state["origin_state"],
-                form_state["destination_state"],
-                weight,
-                form_state["package_type"],
+            quote_request = QuoteRequest(
+                origin_state=form_state["origin_state"],
+                destination_state=form_state["destination_state"],
+                weight_lb=weight,
+                package_type=form_state["package_type"],
             )
+            return redirect(url_for("rate_estimate", quote=issue_quote_token(quote_request)))
     return render_template("rate_estimate.html", quotes=quotes, form_state=form_state)
 
 
