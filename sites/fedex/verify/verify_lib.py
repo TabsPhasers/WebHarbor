@@ -14,7 +14,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import ParseResult, parse_qs, urlparse
 
 
 SITE_ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +41,7 @@ class TaskSpec:
     answer_groups: tuple[tuple[str, ...], ...]
     state_check: Callable[[VerifyArgs], tuple[bool, str]] | None = None
     quote_request: QuoteRequest | None = None
+    login_email: str | None = None
 
 
 def parse_args() -> VerifyArgs:
@@ -68,9 +69,46 @@ def normalized(value: str | None) -> str:
     return " ".join((value or "").casefold().split())
 
 
-def navigated_to(trajectory: dict, path_fragment: str) -> bool:
-    expected = path_fragment.casefold()
-    return any(expected in str(step.get("url", "")).casefold() for step in trajectory.get("steps", []))
+def trusted_local_url(raw_url: str) -> ParseResult | None:
+    try:
+        parsed = urlparse(raw_url)
+        port = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme.casefold() != "http"
+        or (parsed.hostname or "").casefold() not in {"localhost", "127.0.0.1"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is None
+    ):
+        return None
+    return parsed
+
+
+def same_origin(left: ParseResult, right: ParseResult) -> bool:
+    return (
+        left.scheme.casefold(),
+        (left.hostname or "").casefold(),
+        left.port,
+    ) == (
+        right.scheme.casefold(),
+        (right.hostname or "").casefold(),
+        right.port,
+    )
+
+
+def navigated_to(trajectory: dict, required_location: str) -> bool:
+    expected = urlparse(required_location)
+    expected_query = parse_qs(expected.query, keep_blank_values=True)
+    for step in trajectory.get("steps", []):
+        actual = trusted_local_url(str(step.get("url", "")))
+        if actual is None or actual.path.casefold() != expected.path.casefold():
+            continue
+        actual_query = parse_qs(actual.query, keep_blank_values=True)
+        if all(actual_query.get(key) == values for key, values in expected_query.items()):
+            return True
+    return False
 
 
 def final_answer(trajectory: dict) -> str:
@@ -81,10 +119,13 @@ def quote_request_matches(trajectory: dict, expected: QuoteRequest) -> tuple[boo
     candidates: list[QuoteRequest] = []
     for step in trajectory.get("steps", []):
         action_result = step.get("action_result") or {}
-        before = urlparse(str(step.get("url", "")))
-        after = urlparse(str(action_result.get("url_after", "")))
+        before = trusted_local_url(str(step.get("url", "")))
+        after = trusted_local_url(str(action_result.get("url_after", "")))
         is_successful_submit = (
-            str(step.get("action", "")).casefold() == "click"
+            before is not None
+            and after is not None
+            and same_origin(before, after)
+            and str(step.get("action", "")).casefold() == "click"
             and action_result.get("success") is True
             and before.path == "/rate-estimate"
             and not parse_qs(before.query).get("quote")
@@ -98,6 +139,47 @@ def quote_request_matches(trajectory: dict, expected: QuoteRequest) -> tuple[boo
             candidates.append(candidate)
     matched = expected in candidates
     return matched, f"expected={expected!r}; successful_signed_submissions={candidates!r}"
+
+
+def login_matches(trajectory: dict, expected_email: str) -> tuple[bool, str]:
+    seen_email = False
+    seen_password = False
+    successful_submits = 0
+    entered_emails: set[str] = set()
+    for step in trajectory.get("steps", []):
+        before = trusted_local_url(str(step.get("url", "")))
+        if before is None or before.path != "/login":
+            continue
+        action = str(step.get("action", "")).casefold()
+        params = step.get("params") or {}
+        locator = " ".join(
+            str(params.get(key, ""))
+            for key in ("selector", "label", "name", "field", "role")
+        ).casefold()
+        value = str(params.get("text", params.get("value", "")))
+        if action in {"input", "fill", "type"} and "email" in locator:
+            entered_emails.add(value.casefold())
+            seen_email = value.casefold() == expected_email.casefold()
+        if action in {"input", "fill", "type"} and "password" in locator:
+            seen_password = value == "TestPass123!"
+        action_result = step.get("action_result") or {}
+        after = trusted_local_url(str(action_result.get("url_after", "")))
+        if (
+            action == "click"
+            and action_result.get("success") is True
+            and after is not None
+            and same_origin(before, after)
+            and after.path == "/account"
+            and seen_email
+            and seen_password
+        ):
+            successful_submits += 1
+    matched = successful_submits > 0
+    evidence = (
+        f"expected_email={expected_email!r}; entered_emails={sorted(entered_emails)!r}; "
+        f"password_entered={seen_password}; successful_matching_submits={successful_submits}"
+    )
+    return matched, evidence
 
 
 def answer_contains(answer: str, alternative: str) -> bool:
@@ -133,6 +215,40 @@ def query_one(db_path: str, sql: str, params: tuple = ()) -> tuple | None:
         connection.close()
 
 
+def query_all(db_path: str, sql: str, params: tuple = ()) -> list[tuple]:
+    connection = sqlite3.connect(db_path)
+    try:
+        return connection.execute(sql, params).fetchall()
+    finally:
+        connection.close()
+
+
+def unchanged_except_inserts(
+    initial_db: str,
+    after_db: str,
+    allowed_inserts: dict[str, tuple[str, object]],
+) -> tuple[bool, str]:
+    tables_sql = "SELECT name FROM sqlite_master WHERE type = 'table' AND name != 'sqlite_sequence'"
+    initial_tables = {row[0] for row in query_all(initial_db, tables_sql)}
+    after_tables = {row[0] for row in query_all(after_db, tables_sql)}
+    if initial_tables != after_tables or not set(allowed_inserts).issubset(initial_tables):
+        return False, f"initial_tables={sorted(initial_tables)!r}; after_tables={sorted(after_tables)!r}"
+
+    changed_tables = []
+    for table in sorted(initial_tables):
+        where = ""
+        params: tuple = ()
+        if table in allowed_inserts:
+            key_column, key_value = allowed_inserts[table]
+            where = f' WHERE "{key_column}" != ? OR "{key_column}" IS NULL'
+            params = (key_value,)
+        initial_rows = sorted(query_all(initial_db, f'SELECT * FROM "{table}"{where}', params), key=repr)
+        after_rows = sorted(query_all(after_db, f'SELECT * FROM "{table}"{where}', params), key=repr)
+        if initial_rows != after_rows:
+            changed_tables.append(table)
+    return not changed_tables, f"unexpected_changed_tables={changed_tables!r}"
+
+
 class Judge:
     def __init__(self, task_id: str) -> None:
         self.task_id = task_id
@@ -162,16 +278,146 @@ def shipment_state_matches(args: VerifyArgs) -> tuple[bool, str]:
     initial_row = query_one(initial_db, "SELECT COUNT(*) FROM shipments WHERE tracking_number = ?", ("FDX260000061",))
     row = query_one(
         after_db,
-        """SELECT COUNT(*), u.email, s.recipient_name, s.origin_city, s.origin_state,
-                  s.destination_city, s.destination_state, s.package_type,
-                  s.package_weight, s.declared_value, s.service_slug, s.reference_label
+        """SELECT COUNT(*), u.email, s.shipment_code, s.tracking_number,
+                  s.service_slug, s.package_type, s.package_weight,
+                  s.origin_city, s.origin_state, s.destination_city,
+                  s.destination_state, s.recipient_name, s.declared_value,
+                  s.total_cost, s.fulfillment_mode, s.pickup_location_slug,
+                  s.pickup_window, s.status, s.created_on, s.invoice_number,
+                  s.reference_label
              FROM shipments s JOIN users u ON u.id = s.user_id
             WHERE s.tracking_number = ?""",
         ("FDX260000061",),
     )
-    expected = (1, "alice.j@test.com", "Alex Brown", "Seattle", "WA", "Boston", "MA", "Box", 6.0, 240.0, "fedex-2day", "Local demo shipment")
-    ok = bool(initial_row and initial_row[0] == 0 and row == expected)
-    return ok, f"initial_count={initial_row[0] if initial_row else None}; after={row!r}"
+    expected = (
+        1,
+        "alice.j@test.com",
+        "SH-260061",
+        "FDX260000061",
+        "fedex-2day",
+        "Box",
+        6.0,
+        "Seattle",
+        "WA",
+        "Boston",
+        "MA",
+        "Alex Brown",
+        240.0,
+        46.6,
+        "dropoff",
+        "seattle-downtown-wa",
+        "",
+        "Label created",
+        "2026-06-04",
+        "INV-260061",
+        "Local demo shipment",
+    )
+    invoice = query_one(
+        after_db,
+        """SELECT i.invoice_number, u.email, s.tracking_number, i.billed_on,
+                  i.due_date, i.amount, i.status
+             FROM invoices i
+             JOIN users u ON u.id = i.user_id
+             JOIN shipments s ON s.id = i.shipment_id
+            WHERE i.invoice_number = ?""",
+        ("INV-260061",),
+    )
+    expected_invoice = (
+        "INV-260061",
+        "alice.j@test.com",
+        "FDX260000061",
+        "2026-06-04",
+        "2026-06-18",
+        46.6,
+        "Open",
+    )
+    tracking = query_one(
+        after_db,
+        """SELECT t.id, t.tracking_number, u.email, t.recipient_name,
+                  t.sender_name, t.origin_city, t.origin_state,
+                  t.destination_city, t.destination_state, t.service_slug,
+                  t.package_type, t.weight_lb, t.status_stage, t.status_summary,
+                  t.ship_date, t.estimated_delivery, t.latest_scan,
+                  t.package_count, t.signature_required, t.dropoff_location_slug
+             FROM tracking_records t
+             JOIN users u ON u.id = t.user_id
+            WHERE t.tracking_number = ?""",
+        ("FDX260000061",),
+    )
+    expected_tracking = (
+        "FDX260000061",
+        "alice.j@test.com",
+        "Alex Brown",
+        "Alice Johnson",
+        "Seattle",
+        "WA",
+        "Boston",
+        "MA",
+        "fedex-2day",
+        "Box",
+        6.0,
+        "Label created",
+        "Shipment information sent to local FedEx demo systems.",
+        "2026-06-04",
+        "2026-06-06 by 8:00 PM",
+        "Label created",
+        1,
+        0,
+        "seattle-downtown-wa",
+    )
+    tracking_id = tracking[0] if tracking else None
+    events = (
+        query_all(
+            after_db,
+            """SELECT sequence, event_time, location_label, status_label, details
+                 FROM tracking_events
+                WHERE tracking_record_id = ?
+                ORDER BY sequence""",
+            (tracking_id,),
+        )
+        if tracking_id is not None
+        else []
+    )
+    expected_events = [
+        (
+            1,
+            "2026-06-04 09:00",
+            "Seattle, WA",
+            "Label created",
+            "Shipment information sent to local demo systems.",
+        ),
+        (
+            2,
+            "2026-06-04 11:30",
+            "Seattle, WA",
+            "Picked up",
+            "Package picked up in the demo handoff flow.",
+        ),
+    ]
+    only_expected_change, change_evidence = unchanged_except_inserts(
+        initial_db,
+        after_db,
+        {
+            "shipments": ("tracking_number", "FDX260000061"),
+            "invoices": ("invoice_number", "INV-260061"),
+            "tracking_records": ("tracking_number", "FDX260000061"),
+            "tracking_events": ("tracking_record_id", tracking_id),
+        },
+    )
+    ok = bool(
+        initial_row
+        and initial_row[0] == 0
+        and row == expected
+        and invoice == expected_invoice
+        and tracking is not None
+        and tracking[1:] == expected_tracking
+        and events == expected_events
+        and only_expected_change
+    )
+    return ok, (
+        f"initial_count={initial_row[0] if initial_row else None}; shipment={row!r}; "
+        f"invoice={invoice!r}; tracking={tracking!r}; events={events!r}; {change_evidence}"
+    )
 
 
 def pickup_state_matches(args: VerifyArgs) -> tuple[bool, str]:
@@ -183,16 +429,33 @@ def pickup_state_matches(args: VerifyArgs) -> tuple[bool, str]:
     row = query_one(
         after_db,
         """SELECT COUNT(*), u.email, l.slug, p.slot_date, p.time_window,
-                  p.package_count, p.status
+                  p.package_count, p.status, p.created_on
              FROM pickup_requests p
              JOIN users u ON u.id = p.user_id
              JOIN locations l ON l.id = p.location_id
             WHERE p.confirmation_code = ?""",
         ("PU-2609",),
     )
-    expected = (1, "alice.j@test.com", "seattle-downtown-wa", "2026-06-05", "9:00 AM - 11:00 AM", 1, "Scheduled")
-    ok = bool(initial_row and initial_row[0] == 0 and row == expected)
-    return ok, f"initial_count={initial_row[0] if initial_row else None}; after={row!r}"
+    expected = (
+        1,
+        "alice.j@test.com",
+        "seattle-downtown-wa",
+        "2026-06-05",
+        "9:00 AM - 11:00 AM",
+        1,
+        "Scheduled",
+        "2026-06-04",
+    )
+    only_expected_change, change_evidence = unchanged_except_inserts(
+        initial_db,
+        after_db,
+        {"pickup_requests": ("confirmation_code", "PU-2609")},
+    )
+    ok = bool(initial_row and initial_row[0] == 0 and row == expected and only_expected_change)
+    return ok, (
+        f"initial_count={initial_row[0] if initial_row else None}; after={row!r}; "
+        f"{change_evidence}"
+    )
 
 
 TASK_SPECS: dict[int, TaskSpec] = {
@@ -209,8 +472,16 @@ TASK_SPECS: dict[int, TaskSpec] = {
         (("fedex priority overnight",), ("fedex ground home delivery",), ("$43.80", "43.8")),
         quote_request=QuoteRequest("WA", "FL", 4, "Envelope"),
     ),
-    5: TaskSpec(("/login", "/account/shipments", "/invoices"), (("inv-260001",),)),
-    6: TaskSpec(("/login", "/claims"), (("clm-2623",), ("fdx260000023",))),
+    5: TaskSpec(
+        ("/login", "/account/shipments", "/invoices"),
+        (("inv-260001",),),
+        login_email="alice.j@test.com",
+    ),
+    6: TaskSpec(
+        ("/login", "/claims"),
+        (("clm-2623",), ("fdx260000023",)),
+        login_email="bob.c@test.com",
+    ),
     7: TaskSpec(
         ("/login", "/account"),
         (
@@ -218,13 +489,35 @@ TASK_SPECS: dict[int, TaskSpec] = {
             ("9:00 am", "9 am", "9:00 a.m.", "9 a.m.", "9am"),
             ("11:00 am", "11 am", "11:00 a.m.", "11 a.m.", "11am"),
         ),
+        login_email="carol.d@test.com",
     ),
-    8: TaskSpec(("/login", "/account/shipments"), (("sh-260050",), ("charlotte",), ("sh-260055",), ("los angeles",), ("sh-260060",), ("seattle",))),
+    8: TaskSpec(
+        ("/login", "/account/shipments"),
+        (
+            ("sh-260050",),
+            ("charlotte",),
+            ("sh-260055",),
+            ("los angeles",),
+            ("sh-260060",),
+            ("seattle",),
+        ),
+        login_email="david.k@test.com",
+    ),
     9: TaskSpec(("/locations", "/locations/dallas-arts-tx"), (("freight cutoff",), ("4:45 pm",))),
     10: TaskSpec(("/locations", "/locations/miami-brickell-fl"), (("international docs",), ("5:45 pm",))),
     11: TaskSpec(("/search", "/support/weather-delay-guidance"), (("tracking",), ("billing",), ("pickup",))),
-    12: TaskSpec(("/login", "/ship", "/ship/service", "/ship/review", "/ship/confirmation"), (("fdx260000061",),), shipment_state_matches),
-    13: TaskSpec(("/login", "/pickup", "/account"), (("pu-2609",),), pickup_state_matches),
+    12: TaskSpec(
+        ("/login", "/ship", "/ship/service", "/ship/review", "/ship/confirmation"),
+        (("fdx260000061",),),
+        shipment_state_matches,
+        login_email="alice.j@test.com",
+    ),
+    13: TaskSpec(
+        ("/login", "/pickup", "/account"),
+        (("pu-2609",),),
+        pickup_state_matches,
+        login_email="alice.j@test.com",
+    ),
     14: TaskSpec(
         ("/search", "/locations/seattle-downtown-wa"),
         (
@@ -232,7 +525,11 @@ TASK_SPECS: dict[int, TaskSpec] = {
             ("9:00 pm", "9 pm", "9:00 p.m.", "9 p.m.", "9pm"),
         ),
     ),
-    15: TaskSpec(("/login", "/claims"), (("clm-2653",), ("fdx260000053",))),
+    15: TaskSpec(
+        ("/login", "/claims"),
+        (("clm-2653",), ("fdx260000053",)),
+        login_email="david.k@test.com",
+    ),
     16: TaskSpec(("/track/results", "/tracking/FDX260000500"), (("delivered",), ("los angeles",), ("ca", "california"))),
     17: TaskSpec(
         ("/rate-estimate",),
@@ -365,6 +662,9 @@ def run_task(index: int) -> None:
     if spec.quote_request:
         matched, evidence = quote_request_matches(trajectory, spec.quote_request)
         judge.check("submitted_requested_quote", matched, evidence)
+    if spec.login_email:
+        matched, evidence = login_matches(trajectory, spec.login_email)
+        judge.check("signed_in_requested_account", matched, evidence)
     for group_number, alternatives in enumerate(spec.answer_groups, start=1):
         matched = any(answer_contains(answer, alternative) for alternative in alternatives)
         judge.check(f"answer_fact_{group_number}", matched, f"accepted_alternatives={alternatives!r}; final={answer!r}")

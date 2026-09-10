@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -26,22 +28,60 @@ class FedExTaskContractTests(unittest.TestCase):
             if line.strip()
         ]
 
-    def run_verifier(self, index: int, trajectory: dict) -> subprocess.CompletedProcess[str]:
+    def run_verifier(
+        self,
+        index: int,
+        trajectory: dict,
+        initial_db: Path | None = None,
+        after_db: Path | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         with tempfile.TemporaryDirectory() as run_dir:
             (Path(run_dir) / "trajectory.json").write_text(json.dumps(trajectory))
+            command = [
+                sys.executable,
+                str(SITE_ROOT / "verify" / f"verify_{index}.py"),
+                "--run_dir",
+                run_dir,
+                "--no_llm",
+                "true",
+            ]
+            if initial_db is not None:
+                command.extend(["--initial_db", str(initial_db)])
+            if after_db is not None:
+                command.extend(["--after_db", str(after_db)])
             return subprocess.run(
-                [
-                    sys.executable,
-                    str(SITE_ROOT / "verify" / f"verify_{index}.py"),
-                    "--run_dir",
-                    run_dir,
-                    "--no_llm",
-                    "true",
-                ],
+                command,
                 cwd=REPOSITORY_ROOT,
                 capture_output=True,
                 text=True,
             )
+
+    @staticmethod
+    def login_steps(email: str) -> list[dict]:
+        login_url = "http://localhost:40016/login"
+        return [
+            {
+                "url": login_url,
+                "action": "input",
+                "params": {"selector": "#email", "text": email},
+                "action_result": {"success": True, "url_after": login_url},
+            },
+            {
+                "url": login_url,
+                "action": "input",
+                "params": {"selector": "#password", "text": "TestPass123!"},
+                "action_result": {"success": True, "url_after": login_url},
+            },
+            {
+                "url": login_url,
+                "action": "click",
+                "params": {"role": "button", "name": "Sign in to demo account"},
+                "action_result": {
+                    "success": True,
+                    "url_after": "http://localhost:40016/account",
+                },
+            },
+        ]
 
     def test_all_eighteen_tasks_have_one_verifier_and_one_rubric(self) -> None:
         self.assertEqual(len(self.tasks), 18)
@@ -213,18 +253,168 @@ class FedExTaskContractTests(unittest.TestCase):
             self.assertEqual(1, completed.returncode, completed.stdout)
 
     def test_equivalent_hour_formats_are_accepted(self) -> None:
-        cases = {
-            7: (["/login", "/account"], "PU-2621, 9 a.m.–11 a.m."),
-            14: (["/search", "/locations/seattle-downtown-wa"], "7 a.m.–9 p.m."),
-        }
-        for index, (paths, answer) in cases.items():
+        cases = (
+            (
+                7,
+                self.login_steps("carol.d@test.com")
+                + [{"url": "http://localhost:40016/account"}],
+                "PU-2621, 9 a.m.–11 a.m.",
+            ),
+            (
+                14,
+                [
+                    {"url": "http://localhost:40016/search"},
+                    {"url": "http://localhost:40016/locations/seattle-downtown-wa"},
+                ],
+                "7 a.m.–9 p.m.",
+            ),
+        )
+        for index, steps, answer in cases:
             trajectory = {
                 "task_id": f"FedEx--{index}",
-                "steps": [{"url": f"http://localhost:40016{path}"} for path in paths],
+                "steps": steps,
                 "final_answer": answer,
             }
             completed = self.run_verifier(index, trajectory)
             self.assertEqual(0, completed.returncode, f"FedEx--{index}: {completed.stdout}")
+
+    def test_foreign_origins_do_not_satisfy_navigation_or_quote_evidence(self) -> None:
+        location_trajectory = {
+            "task_id": "FedEx--10",
+            "steps": [
+                {"url": "https://example.invalid/locations"},
+                {"url": "https://example.invalid/locations/miami-brickell-fl"},
+            ],
+            "final_answer": "International docs accepted until 5:45 PM",
+        }
+        completed = self.run_verifier(10, location_trajectory)
+        self.assertEqual(1, completed.returncode, completed.stdout)
+
+        token = issue_quote_token(QuoteRequest("CA", "TX", 8, "Box"))
+        quote_url = f"https://example.invalid/rate-estimate?quote={token}"
+        quote_trajectory = {
+            "task_id": "FedEx--3",
+            "steps": [
+                {
+                    "url": "https://example.invalid/rate-estimate",
+                    "action": "click",
+                    "action_result": {"success": True, "url_after": quote_url},
+                }
+            ],
+            "final_answer": "FedEx Ground Home Delivery is cheapest at $37.40.",
+        }
+        completed = self.run_verifier(3, quote_trajectory)
+        self.assertEqual(1, completed.returncode, completed.stdout)
+
+    def test_login_tasks_require_the_requested_account(self) -> None:
+        cases = {
+            5: ("bob.c@test.com", ["/account/shipments", "/invoices"], "INV-260001"),
+            6: ("alice.j@test.com", ["/claims"], "CLM-2623; FDX260000023"),
+            7: ("alice.j@test.com", [], "PU-2621, 9:00 AM - 11:00 AM"),
+            8: (
+                "alice.j@test.com",
+                ["/account/shipments"],
+                "SH-260050 Charlotte; SH-260055 Los Angeles; SH-260060 Seattle",
+            ),
+            15: ("bob.c@test.com", ["/claims"], "CLM-2653; FDX260000053"),
+        }
+        for index, (wrong_email, paths, answer) in cases.items():
+            trajectory = {
+                "task_id": f"FedEx--{index}",
+                "steps": self.login_steps(wrong_email)
+                + [{"url": f"http://localhost:40016{path}"} for path in paths],
+                "final_answer": answer,
+            }
+            completed = self.run_verifier(index, trajectory)
+            self.assertEqual(1, completed.returncode, f"FedEx--{index}: {completed.stdout}")
+
+    def test_wrong_task_replays_are_rejected(self) -> None:
+        claims_replay = {
+            "task_id": "FedEx--15",
+            "steps": self.login_steps("bob.c@test.com")
+            + [{"url": "http://localhost:40016/claims"}],
+            "final_answer": "CLM-2653; FDX260000053",
+        }
+        completed = self.run_verifier(15, claims_replay)
+        self.assertEqual(1, completed.returncode, completed.stdout)
+
+        token = issue_quote_token(QuoteRequest("CA", "TX", 8, "Box"))
+        quote_replay = {
+            "task_id": "FedEx--4",
+            "steps": [
+                {
+                    "url": "http://localhost:40016/rate-estimate",
+                    "action": "click",
+                    "action_result": {
+                        "success": True,
+                        "url_after": f"http://localhost:40016/rate-estimate?quote={token}",
+                    },
+                }
+            ],
+            "final_answer": (
+                "The fastest is FedEx Priority Overnight; the cheapest is "
+                "FedEx Ground Home Delivery; the difference is $43.80."
+            ),
+        }
+        completed = self.run_verifier(4, quote_replay)
+        self.assertEqual(1, completed.returncode, completed.stdout)
+
+    def test_state_tasks_reject_unrelated_database_changes(self) -> None:
+        seed_db = SITE_ROOT / "instance_seed" / "fedex.db"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            initial_db = Path(temp_dir) / "initial.db"
+            after_db = Path(temp_dir) / "after.db"
+            shutil.copy2(seed_db, initial_db)
+            shutil.copy2(seed_db, after_db)
+            connection = sqlite3.connect(after_db)
+            try:
+                connection.execute(
+                    """INSERT INTO shipments (
+                           shipment_code, tracking_number, user_id, service_slug,
+                           package_type, package_weight, origin_city, origin_state,
+                           destination_city, destination_state, recipient_name,
+                           declared_value, total_cost, fulfillment_mode, status,
+                           created_on, reference_label
+                       ) VALUES (?, ?, (SELECT id FROM users WHERE email = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        "SH-260061",
+                        "FDX260000061",
+                        "alice.j@test.com",
+                        "fedex-2day",
+                        "Box",
+                        6.0,
+                        "Seattle",
+                        "WA",
+                        "Boston",
+                        "MA",
+                        "Alex Brown",
+                        240.0,
+                        42.0,
+                        "dropoff",
+                        "Label created",
+                        "2026-06-04",
+                        "Local demo shipment",
+                    ),
+                )
+                connection.execute(
+                    "UPDATE users SET city = ? WHERE email = ?",
+                    ("Tampered City", "alice.j@test.com"),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            trajectory = {
+                "task_id": "FedEx--12",
+                "steps": self.login_steps("alice.j@test.com")
+                + [
+                    {"url": f"http://localhost:40016{path}"}
+                    for path in ("/ship", "/ship/service", "/ship/review", "/ship/confirmation")
+                ],
+                "final_answer": "FDX260000061",
+            }
+            completed = self.run_verifier(12, trajectory, initial_db, after_db)
+            self.assertEqual(1, completed.returncode, completed.stdout)
 
     def test_quote_fields_filled_after_an_unrelated_click_are_not_treated_as_submitted(self) -> None:
         trajectory = {
