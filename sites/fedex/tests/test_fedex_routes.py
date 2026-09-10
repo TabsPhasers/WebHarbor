@@ -81,11 +81,11 @@ class FedExRouteTests(unittest.TestCase):
             "task_id": "FedEx--3",
             "steps": [
                 {
-                    "url": "http://localhost:40016/rate-estimate",
+                    "url": "http://localhost:40024/rate-estimate",
                     "action": "click",
                     "action_result": {
                         "success": True,
-                        "url_after": f"http://localhost:40016{response.location}",
+                        "url_after": f"http://localhost:40024{response.location}",
                     },
                 }
             ],

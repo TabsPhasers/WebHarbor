@@ -58,7 +58,7 @@ class FedExTaskContractTests(unittest.TestCase):
 
     @staticmethod
     def login_steps(email: str) -> list[dict]:
-        login_url = "http://localhost:40016/login"
+        login_url = "http://localhost:40024/login"
         return [
             {
                 "url": login_url,
@@ -78,7 +78,7 @@ class FedExTaskContractTests(unittest.TestCase):
                 "params": {"role": "button", "name": "Sign in to demo account"},
                 "action_result": {
                     "success": True,
-                    "url_after": "http://localhost:40016/account",
+                    "url_after": "http://localhost:40024/account",
                 },
             },
         ]
@@ -215,7 +215,7 @@ class FedExTaskContractTests(unittest.TestCase):
         for index, answer in known_answers.items():
             trajectory = {
                 "task_id": f"FedEx--{index}",
-                "steps": [{"url": "http://localhost:40016/rate-estimate"}],
+                "steps": [{"url": "http://localhost:40024/rate-estimate"}],
                 "final_answer": answer,
             }
             completed = self.run_verifier(index, trajectory)
@@ -223,13 +223,13 @@ class FedExTaskContractTests(unittest.TestCase):
 
     def test_replayed_signed_quote_without_a_successful_form_submit_is_rejected(self) -> None:
         token = issue_quote_token(QuoteRequest("CA", "TX", 8, "Box"))
-        quote_url = f"http://localhost:40016/rate-estimate?quote={token}"
+        quote_url = f"http://localhost:40024/rate-estimate?quote={token}"
         trajectories = (
             {
                 "task_id": "FedEx--3",
                 "steps": [
                     {
-                        "url": "http://localhost:40016/rate-estimate",
+                        "url": "http://localhost:40024/rate-estimate",
                         "action": "navigate",
                         "action_result": {"success": True, "url_after": quote_url},
                     }
@@ -257,14 +257,14 @@ class FedExTaskContractTests(unittest.TestCase):
             (
                 7,
                 self.login_steps("carol.d@test.com")
-                + [{"url": "http://localhost:40016/account"}],
+                + [{"url": "http://localhost:40024/account"}],
                 "PU-2621, 9 a.m.–11 a.m.",
             ),
             (
                 14,
                 [
-                    {"url": "http://localhost:40016/search"},
-                    {"url": "http://localhost:40016/locations/seattle-downtown-wa"},
+                    {"url": "http://localhost:40024/search"},
+                    {"url": "http://localhost:40024/locations/seattle-downtown-wa"},
                 ],
                 "7 a.m.–9 p.m.",
             ),
@@ -322,7 +322,7 @@ class FedExTaskContractTests(unittest.TestCase):
             trajectory = {
                 "task_id": f"FedEx--{index}",
                 "steps": self.login_steps(wrong_email)
-                + [{"url": f"http://localhost:40016{path}"} for path in paths],
+                + [{"url": f"http://localhost:40024{path}"} for path in paths],
                 "final_answer": answer,
             }
             completed = self.run_verifier(index, trajectory)
@@ -332,7 +332,7 @@ class FedExTaskContractTests(unittest.TestCase):
         claims_replay = {
             "task_id": "FedEx--15",
             "steps": self.login_steps("bob.c@test.com")
-            + [{"url": "http://localhost:40016/claims"}],
+            + [{"url": "http://localhost:40024/claims"}],
             "final_answer": "CLM-2653; FDX260000053",
         }
         completed = self.run_verifier(15, claims_replay)
@@ -343,11 +343,11 @@ class FedExTaskContractTests(unittest.TestCase):
             "task_id": "FedEx--4",
             "steps": [
                 {
-                    "url": "http://localhost:40016/rate-estimate",
+                    "url": "http://localhost:40024/rate-estimate",
                     "action": "click",
                     "action_result": {
                         "success": True,
-                        "url_after": f"http://localhost:40016/rate-estimate?quote={token}",
+                        "url_after": f"http://localhost:40024/rate-estimate?quote={token}",
                     },
                 }
             ],
@@ -408,7 +408,7 @@ class FedExTaskContractTests(unittest.TestCase):
                 "task_id": "FedEx--12",
                 "steps": self.login_steps("alice.j@test.com")
                 + [
-                    {"url": f"http://localhost:40016{path}"}
+                    {"url": f"http://localhost:40024{path}"}
                     for path in ("/ship", "/ship/service", "/ship/review", "/ship/confirmation")
                 ],
                 "final_answer": "FDX260000061",
@@ -420,11 +420,11 @@ class FedExTaskContractTests(unittest.TestCase):
         trajectory = {
             "task_id": "FedEx--3",
             "steps": [
-                {"url": "http://localhost:40016/rate-estimate", "action": "select", "params": {"value": "CA"}},
-                {"url": "http://localhost:40016/rate-estimate", "action": "click", "params": {"index": 1}},
-                {"url": "http://localhost:40016/rate-estimate", "action": "select", "params": {"value": "TX"}},
-                {"url": "http://localhost:40016/rate-estimate", "action": "input", "params": {"text": "8"}},
-                {"url": "http://localhost:40016/rate-estimate", "action": "select", "params": {"value": "Box"}},
+                {"url": "http://localhost:40024/rate-estimate", "action": "select", "params": {"value": "CA"}},
+                {"url": "http://localhost:40024/rate-estimate", "action": "click", "params": {"index": 1}},
+                {"url": "http://localhost:40024/rate-estimate", "action": "select", "params": {"value": "TX"}},
+                {"url": "http://localhost:40024/rate-estimate", "action": "input", "params": {"text": "8"}},
+                {"url": "http://localhost:40024/rate-estimate", "action": "select", "params": {"value": "Box"}},
             ],
             "final_answer": "FedEx Ground Home Delivery is cheapest at $37.40.",
         }
@@ -440,7 +440,7 @@ class FedExTaskContractTests(unittest.TestCase):
         for index, (values, answer) in cases.items():
             steps = [
                 {
-                    "url": "http://localhost:40016/rate-estimate",
+                    "url": "http://localhost:40024/rate-estimate",
                     "action": "input",
                     "params": {"index": position, "text": value},
                 }
@@ -448,7 +448,7 @@ class FedExTaskContractTests(unittest.TestCase):
             ]
             steps.append(
                 {
-                    "url": "http://localhost:40016/rate-estimate",
+                    "url": "http://localhost:40024/rate-estimate",
                     "action": "click",
                     "params": {"index": 5},
                 }
