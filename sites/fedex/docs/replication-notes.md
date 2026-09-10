@@ -10,6 +10,8 @@ Tracking, rates, locations, support, local accounts, shipment creation and picku
 
 Marketing, printing, sweepstakes, refunds, corporate links, social links and app downloads preserve their homepage entry points but open an offline-availability notice. Those live workflows are not implemented. Fonts include original regular and light weights; the browser synthesizes bold.
 
+Two brand color pairings are deliberately adjusted for contrast, which is a documented departure from the source palette. Action surfaces and labels use `#c74f00` (4.619:1 with white) instead of the original `#f60` (2.936:1 at 16px/700), and the focus ring uses `#2393cf` (3.417:1 on white, 3.425:1 on the purple header) instead of `#007ab7` (2.490:1 on purple). The original orange is retained for the decorative form-error accent border. `tests/test_fedex_contrast.py` recomputes these ratios from the stylesheet.
+
 Read-only routes never write. Browsing, searching and tracking leave the seeded database byte-identical, so reset and read-only state grading stay exact.
 
 ## Seed generation
@@ -40,6 +42,6 @@ node --check sites/fedex/static/js/main.js
 bash scripts/check_assets.sh
 ```
 
-The suite covers the task contract, ground-truth derivation and uniqueness, verifier rejection of degraded evidence, local route behavior, media and inventory hashes, seed reproducibility and preservation, session and CSRF protection, cross-account authorization, input bounds without server errors, pickup capacity, foreign-key enforcement, and the offline asset surface.
+The suite covers the task contract, ground-truth derivation and uniqueness, verifier rejection of degraded evidence, local route behavior, media and inventory hashes, seed reproducibility and preservation, session and CSRF protection, cross-account authorization, input bounds without server errors, pickup capacity, foreign-key enforcement, error pages, WCAG contrast for the real button and focus states, and the offline asset surface.
 
 These are deterministic regression tests. They are not recorded agent trajectories, and they do not replace browser execution, visual comparison, full-environment integration or independent review.

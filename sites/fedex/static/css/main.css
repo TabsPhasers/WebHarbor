@@ -1,6 +1,6 @@
 @font-face{font-family:FedExSans;src:url("../external_cache/fedex-home/FedExSans_W-Regular.woff2") format("woff2");font-weight:400;font-display:swap}
 @font-face{font-family:FedExSans;src:url("../external_cache/fedex-home/FedExSans_W-Light.woff2") format("woff2");font-weight:300;font-display:swap}
-:root{--fedex-purple:#4d148c;--fedex-purple-deep:#33105f;--fedex-orange:#f60;--ink:#333;--muted:#666;--line:#ddd;--surface:#fff;--success:#157347;--warning:#946000;--danger:#b42318}
+:root{--fedex-purple:#4d148c;--fedex-purple-deep:#33105f;--fedex-orange:#f60;--fedex-orange-action:#ba4b00;--focus-ring:#2393cf;--ink:#333;--muted:#666;--line:#ddd;--surface:#fff;--success:#157347;--warning:#946000;--danger:#b42318}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 body{margin:0;font:16px/1.5 FedExSans,"Helvetica Neue",Arial,sans-serif;color:var(--ink);background:#fff}
@@ -10,7 +10,9 @@ img{display:block;max-width:100%;height:auto}
 button,input,select,textarea{font:inherit}
 button,summary,a,input,select,textarea{touch-action:manipulation}
 button,summary{cursor:pointer}
-:focus-visible{outline:2px dashed #007ab7;outline-offset:4px}
+:focus-visible{outline:3px solid var(--focus-ring);outline-offset:2px}
+/* The header is purple and the page is white, so the focus ring has to clear
+   3:1 against both; --focus-ring is chosen for that pair, not for hue alone. */
 h1,h2,h3,p{margin:0 0 1rem}
 h1,h2{font-weight:300;line-height:1.2}
 h1{font-size:40px}h2{font-size:32px}h3{font-size:20px;font-weight:400}
@@ -110,11 +112,11 @@ sup{font-size:.6em}
 .home-legal{font-size:14px;margin:64px 12px 40px}
 .home-legal h3{font-size:16px;font-weight:700;margin-bottom:8px}
 .home-legal p{margin-bottom:24px}
-.button,button,input[type=submit]{display:inline-block;border:0;border-radius:0;padding:16px 24px;font-size:16px;font-weight:700;line-height:1.25;letter-spacing:1px;text-transform:uppercase;cursor:pointer;background:var(--fedex-orange);color:#fff;text-align:center}
+.button,button,input[type=submit]{display:inline-block;border:0;border-radius:0;padding:16px 24px;font-size:16px;font-weight:700;line-height:1.25;letter-spacing:1px;text-transform:uppercase;cursor:pointer;background:var(--fedex-orange-action);color:#fff;text-align:center}
 .button:hover,button:hover,input[type=submit]:hover{filter:brightness(.95);text-decoration:none}
-.button-secondary,.button-outline{color:var(--fedex-orange);border:2px solid var(--fedex-orange);background:transparent}
+.button-secondary,.button-outline{color:var(--fedex-orange-action);border:2px solid var(--fedex-orange-action);background:transparent}
 .button-accent{background:var(--fedex-purple)}
-.button-primary{background:var(--fedex-orange);color:#fff}
+.button-primary{background:var(--fedex-orange-action);color:#fff}
 .icon-button{background:transparent;padding:8px}
 input,select,textarea{width:100%;padding:15px;border:1px solid #aaa;border-radius:0;background:#fff;color:var(--ink)}
 textarea{min-height:120px;resize:vertical}
