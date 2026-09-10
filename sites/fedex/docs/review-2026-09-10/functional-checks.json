@@ -1,0 +1,279 @@
+[
+  {
+    "source": "functional-qa-v2",
+    "checks": [
+      {
+        "check": "menu-Shipping",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/",
+        "step": 2
+      },
+      {
+        "check": "menu-Tracking",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/",
+        "step": 3
+      },
+      {
+        "check": "menu-Design-&-Print",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/",
+        "step": 4
+      },
+      {
+        "check": "menu-Locations",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/",
+        "step": 5
+      },
+      {
+        "check": "menu-Support",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/",
+        "step": 6
+      },
+      {
+        "check": "home-tab-Rate-&-ship",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/",
+        "step": 8
+      },
+      {
+        "check": "home-tab-Locations",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/",
+        "step": 9
+      },
+      {
+        "check": "home-tab-Track",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/",
+        "step": 10
+      },
+      {
+        "check": "keyboard-tab-right",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/",
+        "step": 11
+      },
+      {
+        "check": "keyboard-tab-home",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/",
+        "step": 12
+      },
+      {
+        "check": "offline-dialog",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/",
+        "step": 13
+      },
+      {
+        "check": "mobile-menu-escape",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/",
+        "step": 16
+      },
+      {
+        "check": "search-delay",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/search?q=delay",
+        "step": 19
+      },
+      {
+        "check": "search-Ship-Center",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/search?q=Ship+Center",
+        "step": 22
+      },
+      {
+        "check": "search-Office-Print",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/search?q=Office+Print",
+        "step": 25
+      },
+      {
+        "check": "browse-track",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/track",
+        "step": 27
+      },
+      {
+        "check": "browse-locations",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/locations",
+        "step": 29
+      },
+      {
+        "check": "browse-support",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/support",
+        "step": 31
+      },
+      {
+        "check": "invalid-quote",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/rate-estimate",
+        "step": 35
+      },
+      {
+        "check": "auth-gate",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/login?next=%2Fship",
+        "step": 37
+      },
+      {
+        "check": "invalid-login",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/login?next=%2Fship",
+        "step": 40
+      },
+      {
+        "check": "valid-login",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/account",
+        "step": 43
+      },
+      {
+        "check": "profile-edit-persistence",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/account",
+        "step": 47
+      },
+      {
+        "check": "invalid-pickup",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/pickup",
+        "step": 51
+      },
+      {
+        "check": "invalid-shipment",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/ship",
+        "step": 58
+      },
+      {
+        "check": "create-persistence",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/ship/confirmation",
+        "step": 73
+      },
+      {
+        "check": "remove-persistence",
+        "pass": true,
+        "url": "http://127.0.0.1:42026/account/shipments",
+        "step": 77
+      }
+    ],
+    "templates": [
+      "/",
+      "/account",
+      "/account/edit",
+      "/account/shipments",
+      "/locations",
+      "/login",
+      "/pickup",
+      "/rate-estimate",
+      "/search",
+      "/ship",
+      "/ship/confirmation",
+      "/ship/review",
+      "/ship/service",
+      "/support",
+      "/track"
+    ],
+    "viewports": [
+      320,
+      390,
+      768
+    ],
+    "overflow_findings": [
+      {
+        "url": "http://127.0.0.1:42026/ship",
+        "width": 320,
+        "overflow_px": 64
+      },
+      {
+        "url": "http://127.0.0.1:42026/ship",
+        "width": 320,
+        "overflow_px": 64
+      }
+    ],
+    "note": "The first source completed through CRUD then stopped on an account-menu harness locator. The second targeted run completes registration and retests the corrected shipment intermediate screens. Old failures are not overwritten.",
+    "reset": {
+      "matches_seed": true
+    }
+  },
+  {
+    "source": "followup-green",
+    "checks": [
+      {
+        "name": "empty-registration",
+        "pass": true,
+        "step": 4,
+        "url": "http://127.0.0.1:42026/register"
+      },
+      {
+        "name": "invalid-email-rejected",
+        "pass": true,
+        "step": 9,
+        "url": "http://127.0.0.1:42026/register"
+      },
+      {
+        "name": "valid-registration",
+        "pass": true,
+        "step": 11,
+        "url": "http://127.0.0.1:42026/account"
+      },
+      {
+        "name": "registered-user-can-login",
+        "pass": true,
+        "step": 18,
+        "url": "http://127.0.0.1:42026/account"
+      },
+      {
+        "name": "shipment-form",
+        "pass": true,
+        "step": 27,
+        "url": "http://127.0.0.1:42026/ship"
+      },
+      {
+        "name": "shipment-no-overflow",
+        "pass": true,
+        "step": 27,
+        "url": "http://127.0.0.1:42026/ship"
+      },
+      {
+        "name": "shipment-persisted",
+        "pass": true,
+        "step": 42,
+        "url": "http://127.0.0.1:42026/ship/confirmation"
+      },
+      {
+        "name": "shipment-removed",
+        "pass": true,
+        "step": 46,
+        "url": "http://127.0.0.1:42026/account/shipments"
+      }
+    ],
+    "templates": [
+      "/account",
+      "/account/shipments",
+      "/register",
+      "/ship",
+      "/ship/confirmation",
+      "/ship/review",
+      "/ship/service"
+    ],
+    "viewports": [
+      320,
+      390,
+      768
+    ],
+    "overflow_findings": [],
+    "note": "The first source completed through CRUD then stopped on an account-menu harness locator. The second targeted run completes registration and retests the corrected shipment intermediate screens. Old failures are not overwritten.",
+    "reset": {
+      "matches_seed": true
+    }
+  }
+]
