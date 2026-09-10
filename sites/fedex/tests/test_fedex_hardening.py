@@ -76,19 +76,51 @@ class SessionSecurityTests(unittest.TestCase):
                          import_secret_key({"FEDEX_SECRET_KEY": "configured-demo-key"}))
 
     def test_no_hardcoded_session_key_remains_in_tracked_source(self) -> None:
-        # The session key authenticates a signed-in account, so a literal in the
-        # repository would let anyone forge a session cookie for any account.
+        """No tracked file may assign a literal session key.
+
+        The session key authenticates a signed-in account, so a literal in the
+        repository would let anyone forge a session cookie for any account. This
+        checks the property structurally instead of searching for one historical
+        value: it catches any hardcoded key, including a new one, and it does not
+        require this test file to contain the value it forbids, which would make
+        the file match its own scan once it is tracked.
+        """
         tracked = subprocess.run(
             ["git", "ls-files", "sites/fedex"], cwd=SITE_ROOT.parents[1],
             check=True, capture_output=True, text=True, timeout=120).stdout.split()
-        literals = []
+        assignment = re.compile(
+            r"""SECRET_KEY["\']?\s*\]?\s*=\s*["\'][^"\']{6,}["\']""")
+        offenders = []
         for name in tracked:
             path = SITE_ROOT.parents[1] / name
             if path.suffix not in {".py", ".html", ".js", ".css", ".json", ".jsonl", ".md", ".sh"}:
                 continue
-            if "webharbor-fedex-demo-key" in path.read_text(errors="ignore"):
-                literals.append(name)
-        self.assertEqual([], literals, "the session key must not be a repository constant")
+            text = path.read_text(errors="ignore")
+            offenders.extend(f"{name}: {match.group(0)[:60]}"
+                             for match in assignment.finditer(text))
+        self.assertEqual([], offenders,
+                         "the session key must not be a repository constant")
+
+        # The configured key must come from the environment with a generated
+        # fallback, so an unset configuration yields a different key per process.
+        source = (SITE_ROOT / "app.py").read_text()
+        self.assertIn(
+            'app.config["SECRET_KEY"] = os.environ.get("FEDEX_SECRET_KEY") or secrets.token_hex(32)',
+            source)
+
+        # Enumerate the module-level signing constants so a new one cannot appear
+        # without being reviewed: the rate-quote tag is the only one, and a
+        # separate test establishes that it carries no identity or permission.
+        constants = []
+        for name in tracked:
+            path = SITE_ROOT.parents[1] / name
+            if path.suffix != ".py":
+                continue
+            for line in path.read_text(errors="ignore").splitlines():
+                if re.match(r"^[A-Z_]*(SIGNING|SECRET)[A-Z_]*\s*=", line):
+                    constants.append(f"{name}: {line.strip()[:60]}")
+        self.assertEqual(["sites/fedex/rate_quote.py: SIGNING_KEY = b\"webharbor-fedex-rate-quote-v1\""],
+                         constants)
 
     def test_rate_quote_token_confers_no_privilege_and_matches_form_bounds(self) -> None:
         # rate_quote.py keeps a module-level signing tag because the site and its
