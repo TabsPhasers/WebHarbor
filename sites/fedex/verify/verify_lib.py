@@ -26,6 +26,31 @@ from rate_quote import QuoteRequest, verify_quote_token  # noqa: E402
 SITE = "fedex"
 
 
+def configured_local_ports() -> frozenset[int]:
+    override = os.environ.get("WH_VERIFIER_SITE_PORTS", "").strip()
+    if override:
+        try:
+            return frozenset(int(value) for value in override.split(","))
+        except ValueError:
+            return frozenset()
+
+    try:
+        tasks = [
+            json.loads(line)
+            for line in (SITE_ROOT / "tasks.jsonl").read_text().splitlines()
+            if line.strip()
+        ]
+        ports = frozenset(urlparse(str(task.get("web", ""))).port for task in tasks)
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return frozenset()
+    if len(ports) != 1:
+        return frozenset()
+    return frozenset(port for port in ports if port is not None)
+
+
+ALLOWED_LOCAL_PORTS = configured_local_ports()
+
+
 @dataclass(frozen=True)
 class VerifyArgs:
     run_dir: str
@@ -80,7 +105,7 @@ def trusted_local_url(raw_url: str) -> ParseResult | None:
         or (parsed.hostname or "").casefold() not in {"localhost", "127.0.0.1"}
         or parsed.username is not None
         or parsed.password is not None
-        or port is None
+        or port not in ALLOWED_LOCAL_PORTS
     ):
         return None
     return parsed

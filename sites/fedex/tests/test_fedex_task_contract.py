@@ -306,6 +306,38 @@ class FedExTaskContractTests(unittest.TestCase):
         completed = self.run_verifier(3, quote_trajectory)
         self.assertEqual(1, completed.returncode, completed.stdout)
 
+    def test_other_local_site_ports_do_not_satisfy_navigation_or_quote_evidence(self) -> None:
+        location_trajectory = {
+            "task_id": "FedEx--10",
+            "steps": [
+                {"url": "http://localhost:40023/locations"},
+                {"url": "http://localhost:40023/locations/miami-brickell-fl"},
+            ],
+            "final_answer": "International docs accepted until 5:45 PM",
+        }
+        completed = self.run_verifier(10, location_trajectory)
+        self.assertEqual(1, completed.returncode, completed.stdout)
+
+        token = issue_quote_token(QuoteRequest("CA", "TX", 8, "Box"))
+        quote_trajectory = {
+            "task_id": "FedEx--3",
+            "steps": [
+                {
+                    "url": "http://localhost:40023/rate-estimate",
+                    "action": "click",
+                    "action_result": {
+                        "success": True,
+                        "url_after": (
+                            "http://localhost:40023/rate-estimate?quote=" + token
+                        ),
+                    },
+                }
+            ],
+            "final_answer": "FedEx Ground Home Delivery is cheapest at $37.40.",
+        }
+        completed = self.run_verifier(3, quote_trajectory)
+        self.assertEqual(1, completed.returncode, completed.stdout)
+
     def test_login_tasks_require_the_requested_account(self) -> None:
         cases = {
             5: ("bob.c@test.com", ["/account/shipments", "/invoices"], "INV-260001"),
