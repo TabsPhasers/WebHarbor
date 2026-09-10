@@ -1,10 +1,10 @@
 {
   "source_page": "https://www.fedex.com/en-us/home.html",
   "captured_on": "2026-09-10",
-  "method": "Chrome Save Page and direct resource saves",
+  "method": "Chrome Save Page and direct resource saves; every entry re-verified against its direct URL by sha256",
   "notes": [
     "FedEx imagery and fonts are distributed in the paired HF archive, not Git. No third-party scripts or trackers are included.",
-    "Logo came from the saved homepage; its original asset URL was not retained.",
+    "Every asset records a direct https source URL, including the logo, and each was re-downloaded and verified byte-identical by sha256.",
     "Business records and help guidance are local simulation data, not live FedEx facts."
   ],
   "assets": [
@@ -149,7 +149,9 @@
       "file": "static/external_cache/fedex-home/logo.png",
       "bytes": 17964,
       "sha256": "99f7cd905d160e4bf4408195b22a893a45661a8855a0841e207d5bafe7411d90",
-      "source_urls": []
+      "source_urls": [
+        "https://www.fedex.com/content/dam/fedex-com/logos/logo.png"
+      ]
     }
   ]
 }

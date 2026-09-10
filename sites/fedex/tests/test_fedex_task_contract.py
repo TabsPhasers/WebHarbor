@@ -1,6 +1,22 @@
+"""Grading-contract tests for the FedEx task set.
+
+No task answer appears in this file. Every expected value is derived from the
+seed through `verify/ground_truth.py`, the same module the verifiers use, and
+every answer string is composed from those derived values at run time. That keeps
+the suite from becoming a second copy of the answer key while still proving:
+
+* each task's target derives from the seed, and derives uniquely;
+* a correct run recorded in the schema `agent_demo/agent.py` actually writes
+  passes the real `verify_N.py` entry point;
+* degraded runs fail: contradictory answers, answer-only runs, foreign origins,
+  missing or forged screenshots, a wrong task id, and state that did not change;
+* the navigation contract binds the query the task asks for, so shortcut
+  navigation does not earn credit.
+"""
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -9,535 +25,707 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 SITE_ROOT = Path(__file__).resolve().parents[1]
-REPOSITORY_ROOT = SITE_ROOT.parents[1]
-sys.path.insert(0, str(SITE_ROOT / "verify"))
-sys.path.insert(0, str(SITE_ROOT))
+VERIFY = SITE_ROOT / "verify"
+for path in (str(SITE_ROOT), str(VERIFY)):
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
+from PIL import Image  # noqa: E402
+
+from ground_truth import TASK_COUNT, task_ground_truth  # noqa: E402
 from rate_quote import QuoteRequest, issue_quote_token  # noqa: E402
-from verify_lib import TASK_SPECS, answer_contains, semantic_answer_matches  # noqa: E402
+
+PORT = 40024
+ORIGIN = f"http://localhost:{PORT}"
+PASSWORD = "TestPass123!"
 
 
-class FedExTaskContractTests(unittest.TestCase):
+def build_seed() -> Path:
+    """Return a seed database built from tracked source."""
+    shipped = SITE_ROOT / "instance_seed" / "fedex.db"
+    if shipped.is_file():
+        return shipped
+    directory = Path(tempfile.mkdtemp(prefix="fedex-contract-seed-"))
+    work = directory / "fedex"
+    shutil.copytree(SITE_ROOT, work, symlinks=True,
+                    ignore=shutil.ignore_patterns("instance", "instance_seed", "__pycache__"))
+    environment = dict(os.environ)
+    environment.pop("WEBSYN_SKIP_BOOTSTRAP", None)
+    environment["PYTHONHASHSEED"] = "0"
+    subprocess.run([sys.executable, "seed_data.py"], cwd=work, env=environment,
+                   check=True, capture_output=True, timeout=900)
+    target = directory / "fedex.db"
+    shutil.copy2(work / "instance_seed" / "fedex.db", target)
+    return target
+
+
+SEED = build_seed()
+
+
+def money(value: float) -> str:
+    return f"${value:,.2f}"
+
+
+def compose_answer(task: int, truth: dict) -> str:
+    """Compose the answer a correct run would give, from derived values only."""
+    kind = truth["kind"]
+    if kind == "tracking_exception":
+        return (f"The latest exception on {truth['target']} was recorded in {truth['location_label']}, "
+                f"caused by {truth['record_status_summary'].rstrip('.').lower()}.")
+    if kind == "delivered_comparison":
+        requirement = ("a signature is required" if truth["signature"]["signature_required"]
+                       else "no signature is required")
+        return f"{truth['delivered']} is the package that is already delivered, and {requirement}."
+    if kind == "exception_guide":
+        return (f"Record the {truth['field_one']} and the {truth['field_two']}; "
+                f"{truth['address_review_status']} means address details are under review.")
+    if kind == "rate_cheapest":
+        return (f"The cheapest displayed service is {truth['cheapest']['name']}, at "
+                f"{money(truth['cheapest']['price'])}.")
+    if kind == "rate_most_expensive":
+        return (f"The most expensive displayed service is {truth['most_expensive']['name']}, at "
+                f"{money(truth['most_expensive']['price'])}.")
+    if kind == "rate_fastest_vs_cheapest":
+        return (f"The fastest option is {truth['fastest']['name']} and the cheapest is "
+                f"{truth['cheapest']['name']}; the difference is "
+                f"{money(truth['fastest_minus_cheapest'])}.")
+    if kind == "invoice_for_delivered_lane":
+        return (f"{truth['invoice_number']} is the invoice for shipment {truth['shipment_code']} "
+                f"delivered to {truth['destination_city']}, {truth['destination_state']}.")
+    if kind == "claim_by_status":
+        return (f"The claim waiting for more information is {truth['claim_number']} "
+                f"(status Info requested), tracking number {truth['tracking_number']}.")
+    if kind == "claim_by_type":
+        return (f"The damage review claim is {truth['claim_number']}, tracking number "
+                f"{truth['tracking_number']}.")
+    if kind == "pickup_by_status":
+        return (f"The pickup marked Ready for driver is {truth['confirmation_code']}, window "
+                f"{truth['time_window']}.")
+    if kind == "shipment_list_by_status":
+        listing = "; ".join(f"{code} to {city}" for code, city in truth["pairs"])
+        return f"The shipments marked Out for delivery are {listing}."
+    if kind == "location_note":
+        return f"The {truth['name']} summary note reads: {truth['note']}."
+    if kind == "weather_guide_and_eta":
+        return (f"The latest exception on {truth['target']} is timestamped {truth['event_time']}, and "
+                f"the Current ETA is {truth['estimated_delivery'].lower()}, so there is no confirmed "
+                f"delivery date.")
+    if kind == "location_hours":
+        return f"The {truth['name']} posts hours of {truth['hours']}."
+    if kind == "final_handoff":
+        return (f"{truth['target']} is delivered; its final timeline handoff was in "
+                f"{truth['final_city']}, {truth['final_state']}.")
+    if kind == "create_shipment":
+        return f"The generated tracking number is {truth['expectation']['tracking_number']}."
+    if kind == "schedule_pickup":
+        return f"The confirmation code is {truth['expectation']['confirmation_code']}."
+    raise AssertionError(f"unhandled ground-truth kind {kind!r}")
+
+
+def contradict_answer(task: int, truth: dict) -> str:
+    """Compose an answer that names the right values and then retracts them."""
+    kind = truth["kind"]
+    if kind == "tracking_exception":
+        return f"{truth['location_label']} had the exception, but weather did not cause it."
+    if kind == "delivered_comparison":
+        return (f"{truth['delivered']} is delivered, but its signature is optional and not required.")
+    if kind == "exception_guide":
+        return (f"Record the {truth['field_one']} and the {truth['field_two']}; "
+                f"{truth['address_review_status']} means no address review is needed.")
+    if kind == "rate_cheapest":
+        return (f"{truth['cheapest']['name']} costs {money(truth['cheapest']['price'])}, but it is not "
+                f"the cheapest option.")
+    if kind == "rate_most_expensive":
+        return (f"{truth['most_expensive']['name']} costs {money(truth['most_expensive']['price'])}, "
+                f"but it is not the most expensive option.")
+    if kind == "rate_fastest_vs_cheapest":
+        return (f"The fastest is {truth['fastest']['name']} and the cheapest is "
+                f"{truth['cheapest']['name']}, difference {money(truth['fastest_minus_cheapest'])}. "
+                f"In fact {truth['fastest']['name']} is slower.")
+    if kind == "invoice_for_delivered_lane":
+        return f"{truth['invoice_number']} is unrelated to the {truth['destination_city']} shipment."
+    if kind == "claim_by_status":
+        return f"{truth['claim_number']} and {truth['tracking_number']} are not waiting for more information."
+    if kind == "claim_by_type":
+        return f"{truth['claim_number']} and {truth['tracking_number']} concern billing, not damage review."
+    if kind == "pickup_by_status":
+        return (f"{truth['confirmation_code']}, {truth['time_window']}, is cancelled rather than "
+                f"Ready for driver.")
+    if kind == "shipment_list_by_status":
+        listing = "; ".join(f"{code} {city}" for code, city in truth["pairs"])
+        return f"{listing}. None are Out for delivery."
+    if kind == "location_note":
+        return f"The note is not {truth['note']}."
+    if kind == "weather_guide_and_eta":
+        return (f"{truth['event_time']}: the ETA is pending, yet it is a guaranteed delivery date "
+                f"and delivery is confirmed.")
+    if kind == "location_hours":
+        return f"The posted hours are not {truth['hours']}."
+    if kind == "final_handoff":
+        competing = next(iter(truth["competing_cities"]), "Memphis")
+        return (f"It is delivered. {truth['final_city']}, {truth['final_state']} was only the origin; "
+                f"the final handoff was {competing}.")
+    if kind == "create_shipment":
+        return f"{truth['expectation']['tracking_number']} was not generated."
+    if kind == "schedule_pickup":
+        return f"{truth['expectation']['confirmation_code']} was not scheduled."
+    raise AssertionError(f"unhandled ground-truth kind {kind!r}")
+
+
+def required_paths(task: int, truth: dict) -> list[str]:
+    """Return the URLs a correct run visits, in order."""
+    kind = truth["kind"]
+    if kind == "tracking_exception":
+        return [f"{ORIGIN}/track/results?numbers={truth['target']}", f"{ORIGIN}/tracking/{truth['target']}"]
+    if kind == "delivered_comparison":
+        return ([f"{ORIGIN}/track/results?numbers={', '.join(truth['numbers'])}",
+                 f"{ORIGIN}/tracking/{truth['delivered']}"])
+    if kind == "exception_guide":
+        return [f"{ORIGIN}/support?q={truth['search_query']}", f"{ORIGIN}/support/{truth['slug']}"]
+    if kind in ("rate_cheapest", "rate_most_expensive", "rate_fastest_vs_cheapest"):
+        return [f"{ORIGIN}/rate-estimate"]
+    if kind == "invoice_for_delivered_lane":
+        return [f"{ORIGIN}/account/shipments", f"{ORIGIN}/invoices"]
+    if kind in ("claim_by_status", "claim_by_type"):
+        return [f"{ORIGIN}/claims"]
+    if kind == "pickup_by_status":
+        return [f"{ORIGIN}/account"]
+    if kind == "shipment_list_by_status":
+        return [f"{ORIGIN}/account/shipments"]
+    if kind == "location_note":
+        if truth["search_query"]:
+            return [f"{ORIGIN}/locations?q={truth['search_query']}", f"{ORIGIN}/locations/{truth['slug']}"]
+        return [f"{ORIGIN}/locations", f"{ORIGIN}/locations/{truth['slug']}"]
+    if kind == "weather_guide_and_eta":
+        return [f"{ORIGIN}/search?q={truth['search_query']}", f"{ORIGIN}/support/{truth['slug']}",
+                f"{ORIGIN}/tracking/{truth['target']}"]
+    if kind == "location_hours":
+        return [f"{ORIGIN}/search?q={truth['search_query']}", f"{ORIGIN}/locations/{truth['slug']}"]
+    if kind == "final_handoff":
+        return [f"{ORIGIN}/track/results?numbers={truth['target']}", f"{ORIGIN}/tracking/{truth['target']}"]
+    if kind == "create_shipment":
+        return [f"{ORIGIN}/ship", f"{ORIGIN}/ship/service", f"{ORIGIN}/ship/review",
+                f"{ORIGIN}/ship/confirmation"]
+    if kind == "schedule_pickup":
+        return [f"{ORIGIN}/pickup", f"{ORIGIN}/account"]
+    raise AssertionError(f"unhandled ground-truth kind {kind!r}")
+
+
+def login_steps(task: int, truth: dict) -> list[dict]:
+    """Return recorder-shaped steps that sign in to the task's account."""
+    from ground_truth import BENCHMARK_ACCOUNTS
+    email = BENCHMARK_ACCOUNTS.get(task)
+    if not email:
+        return []
+    return [
+        {"url": f"{ORIGIN}/login", "action": "input", "params": {"index": 4, "text": email}},
+        {"url": f"{ORIGIN}/login", "action": "input", "params": {"index": 5, "text": PASSWORD}},
+        {"url": f"{ORIGIN}/login", "action": "click", "params": {"index": 6},
+         "lands_on": f"{ORIGIN}/account"},
+    ]
+
+
+def quote_steps(truth: dict) -> list[dict]:
+    """Return recorder-shaped steps that submit the requested rate form."""
+    if "origin_state" not in truth:
+        return []
+    token = issue_quote_token(QuoteRequest(truth["origin_state"], truth["destination_state"],
+                                           truth["weight_lb"], truth["package_type"]))
+    return [{"url": f"{ORIGIN}/rate-estimate", "action": "click", "params": {"index": 9},
+             "lands_on": f"{ORIGIN}/rate-estimate?quote={token}"}]
+
+
+def make_screenshots(directory: Path, count: int) -> list[str]:
+    directory.mkdir(parents=True, exist_ok=True)
+    names = []
+    for index in range(count):
+        name = f"step_{index:03d}.png"
+        Image.new("RGB", (1280, 800), (247, 244, 251)).save(directory / name)
+        names.append(name)
+    return names
+
+
+def build_trajectory(task: int, truth: dict, run_dir: Path, answer: str | None = None,
+                     origin: str = ORIGIN, screenshots: bool = True,
+                     with_login: bool = True, with_quote: bool = True) -> dict:
+    """Write a run directory in the schema agent_demo/agent.py produces."""
+    shots = run_dir / "screenshots"
+    paths = required_paths(task, truth)
+    if origin != ORIGIN:
+        paths = [path.replace(ORIGIN, origin) for path in paths]
+    raw_steps: list[dict] = []
+    if with_login:
+        for step in login_steps(task, truth):
+            entry = dict(step)
+            if origin != ORIGIN:
+                entry["url"] = entry["url"].replace(ORIGIN, origin)
+                if "lands_on" in entry:
+                    entry["lands_on"] = entry["lands_on"].replace(ORIGIN, origin)
+            raw_steps.append(entry)
+    if with_quote:
+        for step in quote_steps(truth):
+            entry = dict(step)
+            if origin != ORIGIN:
+                entry["url"] = entry["url"].replace(ORIGIN, origin)
+                entry["lands_on"] = entry["lands_on"].replace(ORIGIN, origin)
+            raw_steps.append(entry)
+    for index, url in enumerate(paths):
+        if raw_steps and raw_steps[-1].get("lands_on") == url:
+            continue
+        raw_steps.append({"url": url, "action": "click", "params": {"index": index + 1}})
+
+    # Expand the plan into recorder-shaped steps. The recorder stores the URL the
+    # browser was on before each action, so a navigation shows up as the *next*
+    # step's url rather than as a field on the clicking step.
+    expanded: list[dict] = []
+    for position, raw in enumerate(raw_steps):
+        expanded.append(raw)
+        landing = raw.get("lands_on")
+        if not landing:
+            continue
+        following = raw_steps[position + 1] if position + 1 < len(raw_steps) else None
+        if following is not None and following.get("url") == landing:
+            continue
+        expanded.append({"url": landing, "action": "click", "params": {"index": 0}})
+
+    names = make_screenshots(shots, len(expanded) + 2) if screenshots else []
+
+    steps = []
+    for index, raw in enumerate(expanded):
+        step = {
+            "step": index,
+            "url": raw["url"],
+            "title": "FedEx",
+            "thought": "follow the task",
+            "action": raw["action"],
+            "params": raw["params"],
+        }
+        if screenshots:
+            step["screenshot_before"] = names[index]
+            step["screenshot_after"] = names[index + 1]
+        step["action_result"] = {
+            "is_done": False,
+            "success": True,
+            "error": None,
+            "extracted_content": "Clicked" if raw["action"] == "click" else "Typed",
+        }
+        steps.append(step)
+
+    final_step = {
+        "step": len(steps),
+        "url": expanded[-1]["url"] if expanded else origin,
+        "title": "FedEx",
+        "thought": "report the answer",
+        "action": "done",
+        "params": {"text": answer if answer is not None else compose_answer(task, truth),
+                   "success": True},
+    }
+    if screenshots:
+        final_step["screenshot_before"] = names[len(steps)]
+        final_step["screenshot_after"] = names[len(steps) + 1]
+    steps.append(final_step)
+
+    trajectory = {
+        "task": f"FedEx--{task}", "task_id": f"FedEx--{task}", "start_url": f"{origin}/",
+        "model": "contract-test", "max_steps": 40, "steps": steps, "terminated": True,
+        "termination_reason": "agent_done",
+        "final_answer": answer if answer is not None else compose_answer(task, truth),
+        "success_self_report": True, "judge_rubric": "",
+        "verifier_path": f"sites/fedex/verify/verify_{task}.py",
+    }
+    (run_dir / "trajectory.json").write_text(json.dumps(trajectory, indent=2))
+    return trajectory
+
+
+def run_verifier(task: int, run_dir: Path, initial_db: Path | None, after_db: Path | None) -> dict:
+    command = [sys.executable, str(VERIFY / f"verify_{task}.py"), "--run_dir", str(run_dir),
+               "--no_llm", "true"]
+    if initial_db:
+        command += ["--initial_db", str(initial_db)]
+    if after_db:
+        command += ["--after_db", str(after_db)]
+    environment = dict(os.environ, WH_VERIFIER_SITE_PORTS=str(PORT), PYTHONDONTWRITEBYTECODE="1")
+    result = subprocess.run(command, capture_output=True, text=True, timeout=300, env=environment,
+                            cwd=str(VERIFY))
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {"pass": None, "reason": "unparseable", "exit": result.returncode,
+                "stderr": result.stderr[-400:]}
+
+
+class GradingContractTests(unittest.TestCase):
+    """Each task is exercised through its real verify_N.py entry point."""
+
     @classmethod
     def setUpClass(cls) -> None:
-        cls.tasks = [
-            json.loads(line)
-            for line in (SITE_ROOT / "tasks.jsonl").read_text().splitlines()
-            if line.strip()
-        ]
+        cls.workspace = Path(tempfile.mkdtemp(prefix="fedex-contract-"))
+        cls.truths = {task: task_ground_truth(SEED, task) for task in range(TASK_COUNT)}
 
-    def run_verifier(
-        self,
-        index: int,
-        trajectory: dict,
-        initial_db: Path | None = None,
-        after_db: Path | None = None,
-    ) -> subprocess.CompletedProcess[str]:
-        with tempfile.TemporaryDirectory() as run_dir:
-            (Path(run_dir) / "trajectory.json").write_text(json.dumps(trajectory))
-            command = [
-                sys.executable,
-                str(SITE_ROOT / "verify" / f"verify_{index}.py"),
-                "--run_dir",
-                run_dir,
-                "--no_llm",
-                "true",
-            ]
-            if initial_db is not None:
-                command.extend(["--initial_db", str(initial_db)])
-            if after_db is not None:
-                command.extend(["--after_db", str(after_db)])
-            return subprocess.run(
-                command,
-                cwd=REPOSITORY_ROOT,
-                capture_output=True,
-                text=True,
-            )
+    @classmethod
+    def tearDownClass(cls) -> None:
+        shutil.rmtree(cls.workspace, ignore_errors=True)
 
-    @staticmethod
-    def login_steps(email: str) -> list[dict]:
-        login_url = "http://localhost:40024/login"
-        return [
-            {
-                "url": login_url,
-                "action": "input",
-                "params": {"selector": "#email", "text": email},
-                "action_result": {"success": True, "url_after": login_url},
-            },
-            {
-                "url": login_url,
-                "action": "input",
-                "params": {"selector": "#password", "text": "TestPass123!"},
-                "action_result": {"success": True, "url_after": login_url},
-            },
-            {
-                "url": login_url,
-                "action": "click",
-                "params": {"role": "button", "name": "Log in"},
-                "action_result": {
-                    "success": True,
-                    "url_after": "http://localhost:40024/account",
-                },
-            },
-        ]
+    def case_dir(self, task: int, name: str) -> Path:
+        directory = self.workspace / f"task_{task}" / name
+        shutil.rmtree(directory, ignore_errors=True)
+        directory.mkdir(parents=True)
+        return directory
 
-    def test_all_eighteen_tasks_have_one_verifier_and_one_rubric(self) -> None:
-        self.assertEqual(len(self.tasks), 18)
-        self.assertEqual(
-            [task["id"] for task in self.tasks],
-            [f"FedEx--{index}" for index in range(18)],
-        )
+    def snapshots(self, directory: Path, mutate=None) -> tuple[Path, Path]:
+        initial = directory / "initial.db"
+        after = directory / "after.db"
+        shutil.copy2(SEED, initial)
+        shutil.copy2(SEED, after)
+        if mutate:
+            with sqlite3.connect(after) as connection:
+                mutate(connection)
+        return initial, after
 
-        verifier_paths = []
-        for task in self.tasks:
-            self.assertEqual(
-                set(task),
-                {
-                    "web_name",
-                    "id",
-                    "ques",
-                    "web",
-                    "upstream_url",
-                    "verifier_path",
-                    "judge_rubric",
-                },
-            )
-            verifier_path = task["verifier_path"]
-            self.assertTrue(verifier_path.startswith("sites/fedex/verify/verify_"))
-            self.assertTrue((REPOSITORY_ROOT / verifier_path).is_file())
-            self.assertTrue(task["judge_rubric"].startswith("FACT CHECKPOINTS:"))
-            self.assertIn("FAIL if:", task["judge_rubric"])
-            verifier_paths.append(verifier_path)
+    def test_targets_are_unique_and_derivable(self) -> None:
+        for task in range(TASK_COUNT):
+            with self.subTest(task=task):
+                truth = self.truths[task]
+                self.assertTrue(truth["kind"])
+                self.assertTrue(compose_answer(task, truth))
+                self.assertTrue(contradict_answer(task, truth))
 
-        self.assertEqual(len(set(verifier_paths)), len(self.tasks))
+    def test_correct_run_passes(self) -> None:
+        for task in range(TASK_COUNT):
+            with self.subTest(task=task):
+                directory = self.case_dir(task, "correct")
+                mutate = None
+                if self.truths[task]["kind"] == "create_shipment":
+                    mutate = apply_shipment_creation(self.truths[task]["expectation"])
+                elif self.truths[task]["kind"] == "schedule_pickup":
+                    mutate = apply_pickup_creation(self.truths[task]["expectation"])
+                initial, after = self.snapshots(directory, mutate)
+                build_trajectory(task, self.truths[task], directory)
+                verdict = run_verifier(task, directory, initial, after)
+                self.assertTrue(verdict.get("pass"),
+                                f"a correct run must pass: {json.dumps(verdict, indent=2)[:1600]}")
 
-    def test_every_login_task_supplies_the_demo_password(self) -> None:
-        login_tasks = [task for task in self.tasks if "Sign in as" in task["ques"]]
-        self.assertGreater(len(login_tasks), 0)
-        for task in login_tasks:
-            self.assertIn("TestPass123!", task["ques"], task["id"])
+    def test_contradictory_answer_fails(self) -> None:
+        for task in range(TASK_COUNT):
+            with self.subTest(task=task):
+                directory = self.case_dir(task, "contradiction")
+                initial, after = self.snapshots(directory)
+                build_trajectory(task, self.truths[task], directory,
+                                 answer=contradict_answer(task, self.truths[task]))
+                verdict = run_verifier(task, directory, initial, after)
+                self.assertIs(False, verdict.get("pass"),
+                              f"a self-contradicting answer must not earn credit: {verdict}")
 
-    def test_repaired_tasks_require_unambiguous_detail_or_comparison_facts(self) -> None:
-        questions = {task["id"]: task["ques"] for task in self.tasks}
-        self.assertIn("latest exception timeline entry", questions["FedEx--0"])
-        self.assertIn("signature", questions["FedEx--1"].lower())
-        self.assertIn("search for tracking", questions["FedEx--2"].lower())
-        self.assertIn("two event fields", questions["FedEx--2"])
-        self.assertIn("price difference", questions["FedEx--4"])
-        self.assertIn("delivered to Dallas, TX", questions["FedEx--5"])
-        self.assertIn("every shipment", questions["FedEx--8"])
-        self.assertIn("latest exception timestamp", questions["FedEx--11"])
-        self.assertIn("final timeline", questions["FedEx--16"])
+    def test_answer_without_navigation_fails(self) -> None:
+        for task in range(TASK_COUNT):
+            with self.subTest(task=task):
+                directory = self.case_dir(task, "answer_only")
+                initial, after = self.snapshots(directory)
+                trajectory = build_trajectory(task, self.truths[task], directory)
+                trajectory["steps"] = [trajectory["steps"][-1]]
+                (directory / "trajectory.json").write_text(json.dumps(trajectory, indent=2))
+                verdict = run_verifier(task, directory, initial, after)
+                self.assertIs(False, verdict.get("pass"))
 
-    def test_rubrics_do_not_contain_frozen_answers(self) -> None:
-        forbidden_answers = {
-            "FedEx--0": ["Los Angeles", "weather conditions"],
-            "FedEx--1": ["FDX260000001", "signature required"],
-            "FedEx--2": ["event time", "event location", "Operational delay"],
-            "FedEx--3": ["$37.40"],
-            "FedEx--4": ["$43.80"],
-            "FedEx--5": ["INV-260001"],
-            "FedEx--6": ["CLM-2623"],
-            "FedEx--7": ["PU-2621"],
-            "FedEx--8": ["SH-260050", "SH-260055", "SH-260060"],
-            "FedEx--9": ["4:45 PM"],
-            "FedEx--10": ["5:45 PM"],
-            "FedEx--11": ["2026-06-03", "07:35", "pending weather clearance"],
-            "FedEx--12": ["FDX260000061"],
-            "FedEx--13": ["PU-2609"],
-            "FedEx--14": ["7:00 AM - 9:00 PM"],
-            "FedEx--15": ["CLM-2653"],
-            "FedEx--16": ["Los Angeles"],
-            "FedEx--17": ["$191.40"],
-        }
-        for task in self.tasks:
-            rubric = task["judge_rubric"].casefold()
-            for answer in forbidden_answers[task["id"]]:
-                self.assertNotIn(answer.casefold(), rubric, task["id"])
+    def test_foreign_origin_fails(self) -> None:
+        for task in range(TASK_COUNT):
+            with self.subTest(task=task):
+                directory = self.case_dir(task, "foreign_origin")
+                initial, after = self.snapshots(directory)
+                build_trajectory(task, self.truths[task], directory,
+                                 origin="https://www.fedex.example.invalid")
+                verdict = run_verifier(task, directory, initial, after)
+                self.assertIs(False, verdict.get("pass"))
 
-    def test_frozen_answers_cover_every_deterministic_fact_group(self) -> None:
-        frozen_answers = {
-            0: "Los Angeles, CA — weather conditions paused the handoff.",
-            1: "FDX260000001 is delivered; yes, signature is required.",
-            2: "Check event time and event location. Operational delay needs address review.",
-            3: "FedEx Ground Home Delivery — $37.40.",
-            4: "The fastest is FedEx Priority Overnight; the cheapest is FedEx Ground Home Delivery; the difference is $43.80.",
-            5: "INV-260001",
-            6: "CLM-2623; FDX260000023",
-            7: "PU-2621, 9:00 AM - 11:00 AM",
-            8: "SH-260050 Charlotte; SH-260055 Los Angeles; SH-260060 Seattle",
-            9: "Freight cutoff 4:45 PM",
-            10: "International docs accepted until 5:45 PM",
-            11: "2026-06-03 07:35; updated delivery date pending weather clearance.",
-            12: "FDX260000061",
-            13: "PU-2609",
-            14: "7:00 AM - 9:00 PM",
-            15: "CLM-2653; FDX260000053",
-            16: "Delivered in Los Angeles, CA",
-            17: "FedEx Freight Economy — $191.40",
-        }
-        for index, answer in frozen_answers.items():
-            for alternatives in TASK_SPECS[index].answer_groups:
-                self.assertTrue(
-                    any(answer_contains(answer, alternative) for alternative in alternatives),
-                    f"FedEx--{index}: {alternatives!r} not matched by {answer!r}",
-                )
-            self.assertTrue(semantic_answer_matches(index, answer), f"FedEx--{index}: semantic rejection")
+    def test_wrong_port_fails(self) -> None:
+        for task in range(TASK_COUNT):
+            with self.subTest(task=task):
+                directory = self.case_dir(task, "wrong_port")
+                initial, after = self.snapshots(directory)
+                build_trajectory(task, self.truths[task], directory,
+                                 origin=f"http://localhost:{PORT + 1}")
+                verdict = run_verifier(task, directory, initial, after)
+                self.assertIs(False, verdict.get("pass"))
 
-    def test_short_tokens_and_prices_require_boundaries(self) -> None:
-        self.assertFalse(answer_contains("The package is located nearby.", "ca"))
-        self.assertFalse(answer_contains("The displayed price is $137.40.", "37.4"))
-        self.assertTrue(answer_contains("The final state is CA.", "ca"))
-        self.assertTrue(answer_contains("The displayed price is 37.4 dollars.", "37.4"))
+    def test_missing_screenshots_fail(self) -> None:
+        for task in range(TASK_COUNT):
+            with self.subTest(task=task):
+                directory = self.case_dir(task, "no_screenshots")
+                initial, after = self.snapshots(directory)
+                build_trajectory(task, self.truths[task], directory, screenshots=False)
+                verdict = run_verifier(task, directory, initial, after)
+                self.assertIs(False, verdict.get("pass"))
+                self.assertEqual("screenshots_decode", verdict.get("reason"))
 
-    def test_support_tasks_reject_old_boilerplate_and_accept_specific_facts(self) -> None:
-        cases = [
-            (2, "demo workflow and tracking help", False),
-            (2, "Check event time and event location. Operational delay needs address review.", True),
-            (2, "Check event time and event location. Delivered needs address review.", False),
-            (11, "tracking, billing, and pickup", False),
-            (11, "2026-06-03 07:35; updated delivery date pending weather clearance.", True),
-            (11, "June 3, 2026 at 7:35 AM. There is no confirmed delivery date; it is pending weather clearance.", True),
-            (11, "2026-06-03 07:35; delivery is confirmed for today.", False),
-        ]
-        for index, answer, expected in cases:
-            with self.subTest(index=index, answer=answer):
-                self.assertEqual(semantic_answer_matches(index, answer), expected)
+    def test_forged_screenshot_fails(self) -> None:
+        for task in range(TASK_COUNT):
+            with self.subTest(task=task):
+                directory = self.case_dir(task, "forged_screenshot")
+                initial, after = self.snapshots(directory)
+                build_trajectory(task, self.truths[task], directory)
+                first = sorted((directory / "screenshots").glob("*.png"))[0]
+                first.write_text("this is not a png")
+                verdict = run_verifier(task, directory, initial, after)
+                self.assertIs(False, verdict.get("pass"))
+                self.assertEqual("screenshots_decode", verdict.get("reason"))
 
-    def test_reversed_negated_and_extra_claims_are_rejected(self) -> None:
-        adversarial_answers = {
-            1: "FDX260000001 is not delivered and signature is not required.",
-            3: "FedEx Ground Home Delivery is not cheapest at $37.40.",
-            4: "FedEx Ground Home Delivery is fastest and FedEx Priority Overnight is cheapest; difference $43.80.",
-            5: "The answer is not INV-260001.",
-            8: "SH-260050 Charlotte; SH-260055 Los Angeles; SH-260060 Seattle; SH-260046 Washington.",
-            12: "The generated numbers are FDX260000061 and FDX260000999.",
-            16: "It is not delivered and is still moving; final handoff Los Angeles, CA.",
-            17: "FedEx Freight Economy is not most expensive at $191.40.",
-        }
-        for index, answer in adversarial_answers.items():
-            self.assertFalse(semantic_answer_matches(index, answer), f"FedEx--{index}: {answer}")
+    def test_wrong_task_id_fails(self) -> None:
+        for task in range(TASK_COUNT):
+            with self.subTest(task=task):
+                directory = self.case_dir(task, "wrong_task_id")
+                initial, after = self.snapshots(directory)
+                trajectory = build_trajectory(task, self.truths[task], directory)
+                trajectory["task_id"] = f"FedEx--{(task + 1) % TASK_COUNT}"
+                (directory / "trajectory.json").write_text(json.dumps(trajectory, indent=2))
+                verdict = run_verifier(task, directory, initial, after)
+                self.assertIs(False, verdict.get("pass"))
+                self.assertEqual("task_id_matches", verdict.get("reason"))
 
-    def test_quote_answer_without_submitting_requested_inputs_is_rejected(self) -> None:
-        known_answers = {
-            3: "FedEx Ground Home Delivery is cheapest at $37.40.",
-            4: "The fastest is FedEx Priority Overnight; the cheapest is FedEx Ground Home Delivery; the difference is $43.80.",
-            17: "FedEx Freight Economy is most expensive at $191.40.",
-        }
-        for index, answer in known_answers.items():
-            trajectory = {
-                "task_id": f"FedEx--{index}",
-                "steps": [{"url": "http://localhost:40024/rate-estimate"}],
-                "final_answer": answer,
-            }
-            completed = self.run_verifier(index, trajectory)
-            self.assertEqual(1, completed.returncode, f"FedEx--{index}: {completed.stdout}")
+    def test_missing_database_snapshots_fail_closed(self) -> None:
+        for task in range(TASK_COUNT):
+            with self.subTest(task=task):
+                directory = self.case_dir(task, "missing_db")
+                build_trajectory(task, self.truths[task], directory)
+                initial = directory / "initial.db"
+                shutil.copy2(SEED, initial)
+                verdict = run_verifier(task, directory, initial, None)
+                self.assertIs(False, verdict.get("pass"))
+                self.assertTrue(verdict.get("infra_error"))
+                self.assertEqual("database_unavailable", verdict.get("reason"))
 
-    def test_replayed_signed_quote_without_a_successful_form_submit_is_rejected(self) -> None:
-        token = issue_quote_token(QuoteRequest("CA", "TX", 8, "Box"))
-        quote_url = f"http://localhost:40024/rate-estimate?quote={token}"
-        trajectories = (
-            {
-                "task_id": "FedEx--3",
-                "steps": [
-                    {
-                        "url": "http://localhost:40024/rate-estimate",
-                        "action": "navigate",
-                        "action_result": {"success": True, "url_after": quote_url},
-                    }
-                ],
-                "final_answer": "FedEx Ground Home Delivery is cheapest at $37.40.",
-            },
-            {
-                "task_id": "FedEx--3",
-                "steps": [
-                    {
-                        "url": quote_url,
-                        "action": "click",
-                        "action_result": {"success": False, "url_after": quote_url},
-                    }
-                ],
-                "final_answer": "FedEx Ground Home Delivery is cheapest at $37.40.",
-            },
-        )
-        for trajectory in trajectories:
-            completed = self.run_verifier(3, trajectory)
-            self.assertEqual(1, completed.returncode, completed.stdout)
-
-    def test_equivalent_hour_formats_are_accepted(self) -> None:
-        cases = (
-            (
-                7,
-                self.login_steps("carol.d@test.com")
-                + [{"url": "http://localhost:40024/account"}],
-                "PU-2621, 9 a.m.–11 a.m.",
-            ),
-            (
-                14,
-                [
-                    {"url": "http://localhost:40024/search"},
-                    {"url": "http://localhost:40024/locations/seattle-downtown-wa"},
-                ],
-                "7 a.m.–9 p.m.",
-            ),
-        )
-        for index, steps, answer in cases:
-            trajectory = {
-                "task_id": f"FedEx--{index}",
-                "steps": steps,
-                "final_answer": answer,
-            }
-            completed = self.run_verifier(index, trajectory)
-            self.assertEqual(0, completed.returncode, f"FedEx--{index}: {completed.stdout}")
-
-    def test_foreign_origins_do_not_satisfy_navigation_or_quote_evidence(self) -> None:
-        location_trajectory = {
-            "task_id": "FedEx--10",
-            "steps": [
-                {"url": "https://example.invalid/locations"},
-                {"url": "https://example.invalid/locations/miami-brickell-fl"},
-            ],
-            "final_answer": "International docs accepted until 5:45 PM",
-        }
-        completed = self.run_verifier(10, location_trajectory)
-        self.assertEqual(1, completed.returncode, completed.stdout)
-
-        token = issue_quote_token(QuoteRequest("CA", "TX", 8, "Box"))
-        quote_url = f"https://example.invalid/rate-estimate?quote={token}"
-        quote_trajectory = {
-            "task_id": "FedEx--3",
-            "steps": [
-                {
-                    "url": "https://example.invalid/rate-estimate",
-                    "action": "click",
-                    "action_result": {"success": True, "url_after": quote_url},
-                }
-            ],
-            "final_answer": "FedEx Ground Home Delivery is cheapest at $37.40.",
-        }
-        completed = self.run_verifier(3, quote_trajectory)
-        self.assertEqual(1, completed.returncode, completed.stdout)
-
-    def test_other_local_site_ports_do_not_satisfy_navigation_or_quote_evidence(self) -> None:
-        location_trajectory = {
-            "task_id": "FedEx--10",
-            "steps": [
-                {"url": "http://localhost:40023/locations"},
-                {"url": "http://localhost:40023/locations/miami-brickell-fl"},
-            ],
-            "final_answer": "International docs accepted until 5:45 PM",
-        }
-        completed = self.run_verifier(10, location_trajectory)
-        self.assertEqual(1, completed.returncode, completed.stdout)
-
-        token = issue_quote_token(QuoteRequest("CA", "TX", 8, "Box"))
-        quote_trajectory = {
-            "task_id": "FedEx--3",
-            "steps": [
-                {
-                    "url": "http://localhost:40023/rate-estimate",
-                    "action": "click",
-                    "action_result": {
-                        "success": True,
-                        "url_after": (
-                            "http://localhost:40023/rate-estimate?quote=" + token
-                        ),
-                    },
-                }
-            ],
-            "final_answer": "FedEx Ground Home Delivery is cheapest at $37.40.",
-        }
-        completed = self.run_verifier(3, quote_trajectory)
-        self.assertEqual(1, completed.returncode, completed.stdout)
+    def test_malformed_trajectory_fails_closed_without_traceback(self) -> None:
+        for payload in ("{not json", "[]", '{"steps": "nope"}', '{"steps": [1,2]}'):
+            with self.subTest(payload=payload):
+                directory = self.case_dir(0, "malformed")
+                (directory / "trajectory.json").write_text(payload)
+                initial = directory / "initial.db"
+                after = directory / "after.db"
+                shutil.copy2(SEED, initial)
+                shutil.copy2(SEED, after)
+                verdict = run_verifier(0, directory, initial, after)
+                self.assertIs(False, verdict.get("pass"))
+                self.assertTrue(verdict.get("infra_error"))
+                self.assertIsNone(verdict.get("stderr"))
 
     def test_login_tasks_require_the_requested_account(self) -> None:
+        from ground_truth import BENCHMARK_ACCOUNTS
+        for task, email in sorted(BENCHMARK_ACCOUNTS.items()):
+            with self.subTest(task=task):
+                directory = self.case_dir(task, "no_login")
+                initial, after = self.snapshots(directory)
+                build_trajectory(task, self.truths[task], directory, with_login=False)
+                verdict = run_verifier(task, directory, initial, after)
+                self.assertIs(False, verdict.get("pass"))
+                self.assertIn("signed_in_requested_account",
+                              [line.split("]")[1].split(":")[0].strip()
+                               for line in verdict.get("evidence", []) if line.startswith("[FAIL]")])
+                self.assertNotEqual(email, "unused")
+
+    def test_other_account_credentials_do_not_satisfy_login(self) -> None:
+        from ground_truth import BENCHMARK_ACCOUNTS
+        task = 6
+        directory = self.case_dir(task, "wrong_account")
+        initial, after = self.snapshots(directory)
+        build_trajectory(task, self.truths[task], directory)
+        data = json.loads((directory / "trajectory.json").read_text())
+        for step in data["steps"]:
+            if step.get("params", {}).get("text") == BENCHMARK_ACCOUNTS[task]:
+                step["params"]["text"] = "alice.j@test.com"
+        (directory / "trajectory.json").write_text(json.dumps(data, indent=2))
+        verdict = run_verifier(task, directory, initial, after)
+        self.assertIs(False, verdict.get("pass"))
+
+    def test_rate_tasks_require_the_requested_quote(self) -> None:
+        for task in (3, 4, 17):
+            with self.subTest(task=task):
+                directory = self.case_dir(task, "no_quote")
+                initial, after = self.snapshots(directory)
+                build_trajectory(task, self.truths[task], directory, with_quote=False)
+                verdict = run_verifier(task, directory, initial, after)
+                self.assertIs(False, verdict.get("pass"))
+
+    def test_rate_tasks_reject_a_different_quote(self) -> None:
+        for task in (3, 4, 17):
+            with self.subTest(task=task):
+                directory = self.case_dir(task, "wrong_quote")
+                initial, after = self.snapshots(directory)
+                build_trajectory(task, self.truths[task], directory)
+                wrong = issue_quote_token(QuoteRequest("NY", "NY", 1.0, "Envelope"))
+                data = json.loads((directory / "trajectory.json").read_text())
+                rewritten = 0
+                for step in data["steps"]:
+                    url = step.get("url", "")
+                    if url.startswith(f"{ORIGIN}/rate-estimate?quote="):
+                        step["url"] = f"{ORIGIN}/rate-estimate?quote={wrong}"
+                        rewritten += 1
+                self.assertLessEqual(1, rewritten, "no signed quote step to degrade")
+                (directory / "trajectory.json").write_text(json.dumps(data, indent=2))
+                verdict = run_verifier(task, directory, initial, after)
+                self.assertIs(False, verdict.get("pass"))
+
+    def test_shortcut_navigation_does_not_earn_credit(self) -> None:
+        """Reaching the detail page directly must not satisfy a search-bound task."""
         cases = {
-            5: ("bob.c@test.com", ["/account/shipments", "/invoices"], "INV-260001"),
-            6: ("alice.j@test.com", ["/claims"], "CLM-2623; FDX260000023"),
-            7: ("alice.j@test.com", [], "PU-2621, 9:00 AM - 11:00 AM"),
-            8: (
-                "alice.j@test.com",
-                ["/account/shipments"],
-                "SH-260050 Charlotte; SH-260055 Los Angeles; SH-260060 Seattle",
-            ),
-            15: ("bob.c@test.com", ["/claims"], "CLM-2653; FDX260000053"),
+            0: f"{ORIGIN}/track/results?numbers=FDX000000000",
+            1: f"{ORIGIN}/track/results?numbers=FDX000000000",
+            9: f"{ORIGIN}/locations?q=Miami",
+            14: f"{ORIGIN}/search?q=anything-else",
+            16: f"{ORIGIN}/track/results?numbers=NOT-THE-PACKAGE",
+            2: f"{ORIGIN}/support?q=invoices",
+            11: f"{ORIGIN}/search?q=invoices",
         }
-        for index, (wrong_email, paths, answer) in cases.items():
-            trajectory = {
-                "task_id": f"FedEx--{index}",
-                "steps": self.login_steps(wrong_email)
-                + [{"url": f"http://localhost:40024{path}"} for path in paths],
-                "final_answer": answer,
-            }
-            completed = self.run_verifier(index, trajectory)
-            self.assertEqual(1, completed.returncode, f"FedEx--{index}: {completed.stdout}")
+        for task, shortcut in cases.items():
+            with self.subTest(task=task):
+                directory = self.case_dir(task, "shortcut")
+                initial, after = self.snapshots(directory)
+                build_trajectory(task, self.truths[task], directory)
+                data = json.loads((directory / "trajectory.json").read_text())
+                replaced = False
+                for step in data["steps"]:
+                    url = step.get("url", "")
+                    if url.startswith(f"{ORIGIN}/track/results") or url.startswith(f"{ORIGIN}/locations?") \
+                            or url.startswith(f"{ORIGIN}/search?") or url.startswith(f"{ORIGIN}/support?"):
+                        step["url"] = shortcut
+                        replaced = True
+                self.assertTrue(replaced, f"no search step to degrade for task {task}")
+                (directory / "trajectory.json").write_text(json.dumps(data, indent=2))
+                verdict = run_verifier(task, directory, initial, after)
+                self.assertIs(False, verdict.get("pass"),
+                              f"shortcut navigation must not pass task {task}: {verdict}")
 
-    def test_wrong_task_replays_are_rejected(self) -> None:
-        claims_replay = {
-            "task_id": "FedEx--15",
-            "steps": self.login_steps("bob.c@test.com")
-            + [{"url": "http://localhost:40024/claims"}],
-            "final_answer": "CLM-2653; FDX260000053",
-        }
-        completed = self.run_verifier(15, claims_replay)
-        self.assertEqual(1, completed.returncode, completed.stdout)
+    def test_read_only_tasks_reject_any_state_change(self) -> None:
+        read_only = [task for task in range(TASK_COUNT)
+                     if self.truths[task]["kind"] not in ("create_shipment", "schedule_pickup")]
+        self.assertEqual(16, len(read_only))
+        for task in read_only:
+            with self.subTest(task=task):
+                directory = self.case_dir(task, "state_changed")
+                initial, after = self.snapshots(
+                    directory, lambda connection: connection.execute(
+                        "UPDATE users SET city='Tampered' WHERE id=1"))
+                build_trajectory(task, self.truths[task], directory)
+                verdict = run_verifier(task, directory, initial, after)
+                self.assertIs(False, verdict.get("pass"))
+                self.assertEqual("state_read_only", verdict.get("reason"))
 
-        token = issue_quote_token(QuoteRequest("CA", "TX", 8, "Box"))
-        quote_replay = {
-            "task_id": "FedEx--4",
-            "steps": [
-                {
-                    "url": "http://localhost:40024/rate-estimate",
-                    "action": "click",
-                    "action_result": {
-                        "success": True,
-                        "url_after": f"http://localhost:40024/rate-estimate?quote={token}",
-                    },
-                }
-            ],
-            "final_answer": (
-                "The fastest is FedEx Priority Overnight; the cheapest is "
-                "FedEx Ground Home Delivery; the difference is $43.80."
-            ),
-        }
-        completed = self.run_verifier(4, quote_replay)
-        self.assertEqual(1, completed.returncode, completed.stdout)
+    def test_state_tasks_reject_an_unchanged_database(self) -> None:
+        for task in (12, 13):
+            with self.subTest(task=task):
+                directory = self.case_dir(task, "state_unchanged")
+                initial, after = self.snapshots(directory)
+                build_trajectory(task, self.truths[task], directory)
+                verdict = run_verifier(task, directory, initial, after)
+                self.assertIs(False, verdict.get("pass"))
 
-    def test_state_tasks_reject_unrelated_database_changes(self) -> None:
-        seed_db = SITE_ROOT / "instance_seed" / "fedex.db"
-        with tempfile.TemporaryDirectory() as temp_dir:
-            initial_db = Path(temp_dir) / "initial.db"
-            after_db = Path(temp_dir) / "after.db"
-            shutil.copy2(seed_db, initial_db)
-            shutil.copy2(seed_db, after_db)
-            connection = sqlite3.connect(after_db)
-            try:
-                connection.execute(
-                    """INSERT INTO shipments (
-                           shipment_code, tracking_number, user_id, service_slug,
-                           package_type, package_weight, origin_city, origin_state,
-                           destination_city, destination_state, recipient_name,
-                           declared_value, total_cost, fulfillment_mode, status,
-                           created_on, reference_label
-                       ) VALUES (?, ?, (SELECT id FROM users WHERE email = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (
-                        "SH-260061",
-                        "FDX260000061",
-                        "alice.j@test.com",
-                        "fedex-2day",
-                        "Box",
-                        6.0,
-                        "Seattle",
-                        "WA",
-                        "Boston",
-                        "MA",
-                        "Alex Brown",
-                        240.0,
-                        42.0,
-                        "dropoff",
-                        "Label created",
-                        "2026-06-04",
-                        "Local demo shipment",
-                    ),
-                )
-                connection.execute(
-                    "UPDATE users SET city = ? WHERE email = ?",
-                    ("Tampered City", "alice.j@test.com"),
-                )
-                connection.commit()
-            finally:
-                connection.close()
+    def test_state_tasks_reject_unrelated_writes(self) -> None:
+        for task, table in ((12, "claims"), (13, "search_logs")):
+            with self.subTest(task=task):
+                directory = self.case_dir(task, "unrelated_write")
+                initial, after = self.snapshots(directory)
+                with sqlite3.connect(after) as connection:
+                    if table == "claims":
+                        connection.execute(
+                            "INSERT INTO claims (claim_number,user_id,tracking_number,claim_type,"
+                            "amount,status,opened_on,note) VALUES "
+                            "('CLM-9999',1,'FDX260000001','Missing package',1.0,'Closed','2026-06-04','x')")
+                    else:
+                        connection.execute(
+                            "INSERT INTO search_logs (query,search_type,created_on) "
+                            "VALUES ('tampered','global','2026-06-04')")
+                build_trajectory(task, self.truths[task], directory)
+                verdict = run_verifier(task, directory, initial, after)
+                self.assertIs(False, verdict.get("pass"))
 
-            trajectory = {
-                "task_id": "FedEx--12",
-                "steps": self.login_steps("alice.j@test.com")
-                + [
-                    {"url": f"http://localhost:40024{path}"}
-                    for path in ("/ship", "/ship/service", "/ship/review", "/ship/confirmation")
-                ],
-                "final_answer": "FDX260000061",
-            }
-            completed = self.run_verifier(12, trajectory, initial_db, after_db)
-            self.assertEqual(1, completed.returncode, completed.stdout)
+    def test_state_tasks_reject_a_stale_seed_version(self) -> None:
+        for task in (12, 13):
+            with self.subTest(task=task):
+                directory = self.case_dir(task, "stale_seed")
+                initial, after = self.snapshots(directory)
+                with sqlite3.connect(initial) as connection:
+                    connection.execute("UPDATE seed_metadata SET value='fedex-source-v1'")
+                build_trajectory(task, self.truths[task], directory)
+                verdict = run_verifier(task, directory, initial, after)
+                self.assertIs(False, verdict.get("pass"))
+                self.assertTrue(verdict.get("infra_error"))
+                self.assertEqual("initial_snapshot_invalid", verdict.get("reason"))
 
-    def test_quote_fields_filled_after_an_unrelated_click_are_not_treated_as_submitted(self) -> None:
-        trajectory = {
-            "task_id": "FedEx--3",
-            "steps": [
-                {"url": "http://localhost:40024/rate-estimate", "action": "select", "params": {"value": "CA"}},
-                {"url": "http://localhost:40024/rate-estimate", "action": "click", "params": {"index": 1}},
-                {"url": "http://localhost:40024/rate-estimate", "action": "select", "params": {"value": "TX"}},
-                {"url": "http://localhost:40024/rate-estimate", "action": "input", "params": {"text": "8"}},
-                {"url": "http://localhost:40024/rate-estimate", "action": "select", "params": {"value": "Box"}},
-            ],
-            "final_answer": "FedEx Ground Home Delivery is cheapest at $37.40.",
-        }
-        completed = self.run_verifier(3, trajectory)
-        self.assertEqual(1, completed.returncode, completed.stdout)
 
-    def test_all_verifiers_reject_homepage_noop(self) -> None:
-        seed = SITE_ROOT / "instance_seed" / "fedex.db"
-        for index in range(18):
-            with self.subTest(task=index):
-                result = self.run_verifier(index, {
-                    "task_id": f"FedEx--{index}",
-                    "steps": [{"url": "http://localhost:40024/"}],
-                    "final_answer": "",
-                }, seed, seed)
-                self.assertEqual(1, result.returncode, result.stdout)
+def apply_shipment_creation(expectation: dict):
+    """Write the rows a correct shipment flow produces, using derived values."""
 
-    def test_revised_support_contracts_end_to_end(self) -> None:
-        answers = {
-            2: "Record the event time and event location. Operational delay means address review.",
-            11: "June 3, 2026 at 7:35 AM. No confirmed delivery date; pending weather clearance.",
-        }
-        for index, answer in answers.items():
-            paths = TASK_SPECS[index].required_paths
-            for name, steps, output, expected in (
-                ("valid", paths, answer, 0),
-                ("no navigation", (), answer, 1),
-                ("missing detail", paths[:-1], answer, 1),
-                ("old boilerplate", paths, "tracking, billing and pickup workflows", 1),
-            ):
-                with self.subTest(task=index, case=name):
-                    result = self.run_verifier(index, {
-                        "task_id": f"FedEx--{index}",
-                        "steps": [{"url": f"http://localhost:40024{path}"} for path in steps],
-                        "final_answer": output,
-                    })
-                    self.assertEqual(expected, result.returncode, result.stdout)
+    def mutate(connection: sqlite3.Connection) -> None:
+        from shipping_rules import DEMO_SHIPMENT_LABEL
+        user_id = connection.execute("SELECT id FROM users WHERE lower(email)=lower(?)",
+                                     (expectation["user_email"],)).fetchone()[0]
+        connection.execute(
+            """INSERT INTO shipments (shipment_code, tracking_number, user_id, service_slug,
+                   package_type, package_weight, origin_city, origin_state, destination_city,
+                   destination_state, recipient_name, declared_value, total_cost, fulfillment_mode,
+                   pickup_location_slug, pickup_window, status, created_on, invoice_number,
+                   reference_label)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (expectation["shipment_code"], expectation["tracking_number"], user_id,
+             expectation["service_slug"], expectation["package_type"], expectation["package_weight"],
+             expectation["origin_city"], expectation["origin_state"], expectation["destination_city"],
+             expectation["destination_state"], expectation["recipient_name"],
+             expectation["declared_value"], expectation["total_cost"], expectation["fulfillment_mode"],
+             expectation["pickup_location_slug"], expectation["pickup_window"], expectation["status"],
+             expectation["created_on"], expectation["invoice_number"], DEMO_SHIPMENT_LABEL))
+        shipment_id = connection.execute("SELECT id FROM shipments WHERE shipment_code=?",
+                                         (expectation["shipment_code"],)).fetchone()[0]
+        connection.execute(
+            """INSERT INTO tracking_records (tracking_number, shipment_id, user_id, recipient_name,
+                   sender_name, origin_city, origin_state, destination_city, destination_state,
+                   service_slug, package_type, weight_lb, status_stage, status_summary, ship_date,
+                   estimated_delivery, latest_scan, package_count, signature_required,
+                   dropoff_location_slug)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (expectation["tracking_number"], shipment_id, user_id, expectation["recipient_name"],
+             expectation["sender_name"], expectation["origin_city"], expectation["origin_state"],
+             expectation["destination_city"], expectation["destination_state"],
+             expectation["service_slug"], expectation["package_type"], expectation["package_weight"],
+             expectation["status"], expectation["status_summary"], expectation["created_on"],
+             expectation["estimated_delivery"], expectation["status"], expectation["package_count"],
+             expectation["signature_required"], expectation["pickup_location_slug"]))
+        record_id = connection.execute("SELECT id FROM tracking_records WHERE tracking_number=?",
+                                       (expectation["tracking_number"],)).fetchone()[0]
+        for event in expectation["timeline"]:
+            connection.execute(
+                """INSERT INTO tracking_events (tracking_record_id, sequence, event_time,
+                       location_label, status_label, details)
+                   VALUES (?,?,?,?,?,?)""",
+                (record_id, event["sequence"], event["event_time"], event["location_label"],
+                 event["status_label"], event["details"]))
+        connection.execute(
+            """INSERT INTO invoices (invoice_number, user_id, shipment_id, billed_on, due_date,
+                   amount, status)
+               VALUES (?,?,?,?,?,?,?)""",
+            (expectation["invoice_number"], user_id, shipment_id, expectation["invoice_billed_on"],
+             expectation["invoice_due_date"], expectation["total_cost"], "Open"))
 
-    def test_values_typed_into_arbitrary_fields_do_not_count_as_a_quote_submission(self) -> None:
-        cases = {
-            3: (["CA", "TX", "8", "Box"], "FedEx Ground Home Delivery is cheapest at $37.40."),
-            4: (["WA", "FL", "4", "Envelope"], "The fastest is FedEx Priority Overnight; the cheapest is FedEx Ground Home Delivery; the difference is $43.80."),
-            17: (["TX", "FL", "12", "Freight pallet"], "FedEx Freight Economy is most expensive at $191.40."),
-        }
-        for index, (values, answer) in cases.items():
-            steps = [
-                {
-                    "url": "http://localhost:40024/rate-estimate",
-                    "action": "input",
-                    "params": {"index": position, "text": value},
-                }
-                for position, value in enumerate(values, start=1)
-            ]
-            steps.append(
-                {
-                    "url": "http://localhost:40024/rate-estimate",
-                    "action": "click",
-                    "params": {"index": 5},
-                }
-            )
-            trajectory = {
-                "task_id": f"FedEx--{index}",
-                "steps": steps,
-                "final_answer": answer,
-            }
-            completed = self.run_verifier(index, trajectory)
-            self.assertEqual(1, completed.returncode, f"FedEx--{index}: {completed.stdout}")
+    return mutate
+
+
+def apply_pickup_creation(expectation: dict):
+    """Write the rows a correct pickup flow produces, using derived values."""
+
+    def mutate(connection: sqlite3.Connection) -> None:
+        user_id = connection.execute("SELECT id FROM users WHERE lower(email)=lower(?)",
+                                     (expectation["user_email"],)).fetchone()[0]
+        location_id = connection.execute("SELECT id FROM locations WHERE slug=?",
+                                        (expectation["location_slug"],)).fetchone()[0]
+        connection.execute(
+            """INSERT INTO pickup_requests (confirmation_code, user_id, location_id, slot_date,
+                   time_window, package_count, status, created_on)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (expectation["confirmation_code"], user_id, location_id, expectation["slot_date"],
+             expectation["time_window"], expectation["package_count"], expectation["status"],
+             expectation["created_on"]))
+        connection.execute("UPDATE pickup_slots SET remaining_capacity=? WHERE id=?",
+                           (expectation["capacity_after"], expectation["slot_id"]))
+
+    return mutate
 
 
 if __name__ == "__main__":

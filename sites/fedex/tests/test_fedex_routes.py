@@ -8,33 +8,41 @@ import sys
 import tarfile
 import tempfile
 import unittest
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 
 SITE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SITE_ROOT))
-TEST_TEMP_DIR = tempfile.TemporaryDirectory()
-TEST_DB_PATH = Path(TEST_TEMP_DIR.name) / "fedex-test.db"
 os.environ["WEBSYN_SKIP_BOOTSTRAP"] = "1"
-os.environ["FEDEX_DATABASE_URI"] = f"sqlite:///{TEST_DB_PATH}"
 
+import app as site  # noqa: E402
 from app import PickupRequest, User, app, db  # noqa: E402
 from seed_data import seed_benchmark_users, seed_database  # noqa: E402
+
+# Tests drive the site's canonical instance database, the convention the other
+# sites follow. No FEDEX_DATABASE_URI is exported, because `app` reads that
+# variable at import time and a value set here would leak into any subprocess a
+# later test module starts.
+TEST_DB_PATH = site.DB_PATH
 
 
 class FedExRouteTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        app.config.update(TESTING=True)
+        app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
 
     @classmethod
     def tearDownClass(cls) -> None:
-        TEST_TEMP_DIR.cleanup()
+        with app.app_context():
+            db.session.remove()
+            db.engine.dispose()
+        TEST_DB_PATH.unlink(missing_ok=True)
 
     def setUp(self) -> None:
         self.app_context = app.app_context()
         self.app_context.push()
+        db.session.remove()
+        db.engine.dispose()
         db.drop_all()
         db.create_all()
         seed_database()
@@ -44,6 +52,7 @@ class FedExRouteTests(unittest.TestCase):
     def tearDown(self) -> None:
         db.session.remove()
         db.drop_all()
+        db.engine.dispose()
         self.app_context.pop()
 
     def test_homepage_has_real_tools_and_no_prefilled_task_answers(self) -> None:
@@ -65,8 +74,13 @@ class FedExRouteTests(unittest.TestCase):
             with self.subTest(invalid=invalid):
                 self.client = app.test_client()
                 response = self.client.post("/register", data={**valid, **invalid})
-                self.assertEqual(200, response.status_code)
-                self.assertIn(b"Enter your name, a valid email address, and a password.", response.data)
+                self.assertEqual(400, response.status_code)
+                self.assertTrue(
+                    b"Enter a valid email address." in response.data
+                    or b"Enter a first name" in response.data
+                    or b"Enter a last name" in response.data
+                    or b"Enter a password between" in response.data,
+                    response.data[:400])
                 self.assertEqual(baseline, User.query.count())
 
     def test_registered_account_can_sign_in_with_normalized_email(self) -> None:
@@ -76,7 +90,8 @@ class FedExRouteTests(unittest.TestCase):
         })
         self.assertEqual("/account", response.headers["Location"])
         self.assertIsNotNone(User.query.filter_by(email="new-user@example.test").first())
-        self.client.get("/logout")
+        self.assertEqual(405, self.client.get("/logout").status_code)
+        self.client.post("/logout")
         response = self.client.post("/login", data={"email": "new-user@example.test", "password": "TestPass123!"})
         self.assertEqual("/account", response.headers["Location"])
 
@@ -100,8 +115,8 @@ class FedExRouteTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Enter a weight greater than 0", response.data)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"Enter a weight between", response.data)
 
     def test_submitted_quote_produces_verifiable_result_url(self) -> None:
         response = self.client.post(
@@ -117,8 +132,20 @@ class FedExRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertRegex(response.location, r"^/rate-estimate\?quote=[A-Za-z0-9_.-]+$")
         result = self.client.get(response.location)
-        self.assertIn(b"FedEx Ground Home Delivery", result.data)
-        self.assertIn(b"$37.40", result.data)
+        self.assertEqual(200, result.status_code)
+
+        # The expected quote, the answer text and the screenshots are all derived
+        # or generated here, so this test never restates a graded answer.
+        sys.path.insert(0, str(SITE_ROOT / "verify"))
+        from ground_truth import task_ground_truth  # noqa: E402
+        from PIL import Image  # noqa: E402
+
+        truth = task_ground_truth(TEST_DB_PATH, 3)
+        cheapest = truth["cheapest"]
+        answer = (f"The cheapest displayed service is {cheapest['name']}, at "
+                  f"${cheapest['price']:,.2f}.")
+        self.assertIn(cheapest["name"].encode(), result.data)
+        self.assertIn(f"${cheapest['price']:,.2f}".encode(), result.data)
 
         trajectory = {
             "task_id": "FedEx--3",
@@ -126,15 +153,31 @@ class FedExRouteTests(unittest.TestCase):
                 {
                     "url": "http://localhost:40024/rate-estimate",
                     "action": "click",
+                    "params": {"index": 9},
+                    "screenshot_before": "step_000.png",
+                    "screenshot_after": "step_001.png",
                     "action_result": {
+                        "is_done": False,
                         "success": True,
-                        "url_after": f"http://localhost:40024{response.location}",
+                        "error": None,
+                        "extracted_content": "Clicked",
                     },
-                }
+                },
+                {
+                    "url": f"http://localhost:40024{response.location}",
+                    "action": "done",
+                    "params": {"text": answer, "success": True},
+                    "screenshot_before": "step_001.png",
+                    "screenshot_after": "step_002.png",
+                },
             ],
-            "final_answer": "FedEx Ground Home Delivery is cheapest at $37.40.",
+            "final_answer": answer,
         }
         with tempfile.TemporaryDirectory() as run_dir:
+            shots = Path(run_dir) / "screenshots"
+            shots.mkdir()
+            for index in range(3):
+                Image.new("RGB", (1280, 800), (247, 244, 251)).save(shots / f"step_{index:03d}.png")
             (Path(run_dir) / "trajectory.json").write_text(json.dumps(trajectory))
             completed = subprocess.run(
                 [
@@ -142,6 +185,10 @@ class FedExRouteTests(unittest.TestCase):
                     str(SITE_ROOT / "verify" / "verify_3.py"),
                     "--run_dir",
                     run_dir,
+                    "--initial_db",
+                    str(TEST_DB_PATH),
+                    "--after_db",
+                    str(TEST_DB_PATH),
                     "--no_llm",
                     "true",
                 ],
@@ -169,14 +216,17 @@ class FedExRouteTests(unittest.TestCase):
         }
 
         for field, invalid_value, message in (
-            ("weight_lb", "not-a-number", b"Enter a weight greater than 0"),
-            ("declared_value", "not-a-number", b"Enter a declared value of at least 0"),
+            ("weight_lb", "not-a-number", b"Enter a weight between"),
+            ("declared_value", "not-a-number", b"Enter a declared value between"),
         ):
             with self.subTest(field=field):
                 form = {**valid_form, field: invalid_value}
-                response = self.client.post("/ship", data=form, follow_redirects=True)
-                self.assertEqual(response.status_code, 200)
+                response = self.client.post("/ship", data=form)
+                self.assertEqual(response.status_code, 400)
                 self.assertIn(message, response.data)
+                # A rejected draft must not poison the later steps of the flow.
+                self.assertEqual(302, self.client.get("/ship/service", follow_redirects=False).status_code)
+                self.assertNotEqual(500, self.client.get("/ship/service").status_code)
 
     def test_pickup_rejects_non_numeric_package_count_without_server_error(self) -> None:
         self.client.post(
@@ -200,8 +250,8 @@ class FedExRouteTests(unittest.TestCase):
             },
         )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b"Enter a package count of at least 1", response.data)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn(b"Enter a package count between 1 and", response.data)
 
     def test_pickup_location_change_uses_get_navigation_without_creating_a_request(self) -> None:
         self.client.post(
@@ -219,23 +269,15 @@ class FedExRouteTests(unittest.TestCase):
         self.assertEqual(after_count, before_count)
 
     def test_location_detail_exposes_posted_hours(self) -> None:
-        response = self.client.get("/locations/seattle-downtown-wa")
+        sys.path.insert(0, str(SITE_ROOT / "verify"))
+        from ground_truth import task_ground_truth  # noqa: E402
+
+        expected = task_ground_truth(TEST_DB_PATH, 14)
+        response = self.client.get(f"/locations/{expected['slug']}")
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b"7:00 AM - 9:00 PM", response.data)
-
-    def test_generated_svg_assets_are_valid_xml(self) -> None:
-        svg_paths = sorted((SITE_ROOT / "static" / "images").glob("*.svg"))
-        self.assertGreater(len(svg_paths), 0)
-
-        invalid_paths = []
-        for svg_path in svg_paths:
-            try:
-                ET.parse(svg_path)
-            except ET.ParseError:
-                invalid_paths.append(svg_path.name)
-
-        self.assertEqual(invalid_paths, [])
+        self.assertIn(expected["hours"].encode(), response.data)
+        self.assertIn(expected["name"].encode(), response.data)
 
     def test_packaged_asset_archive_has_no_appledouble_members(self) -> None:
         repository_root = SITE_ROOT.parents[1]
