@@ -115,6 +115,8 @@ label{font-size:14px;font-weight:700}
 .card img{max-height:220px;object-fit:contain}
 .stack{display:grid;gap:16px;align-content:start}
 .stack>p{margin:0}
+.shipment-form,.shipment-form .field{grid-template-columns:minmax(0,1fr)}
+.shipment-form input,.shipment-form select{min-width:0}
 .stack-actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:16px}
 .section-title{display:flex;justify-content:space-between;align-items:end;gap:16px;margin:0 0 28px}
 .section-title:not(:first-child){margin-top:36px}
