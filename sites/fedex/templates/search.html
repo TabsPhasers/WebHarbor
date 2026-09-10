@@ -11,13 +11,16 @@
     <form method="get" class="form-grid two">
       <div class="field">
         <label for="q">Search query</label>
-        <input id="q" name="q" value="{{ query }}" placeholder="delay, Seattle, FDX260000001">
+        <input id="q" name="q" value="{{ query }}" placeholder="delay, Seattle, FDX260000001" maxlength="180">
       </div>
       <div class="field" style="align-self:end">
         <input type="submit" value="Search">
       </div>
     </form>
   </section>
+  {% if query_rejected %}
+    <div class="empty-state" role="status">That search is longer than this local demo accepts. Enter 180 characters or fewer.</div>
+  {% endif %}
   {% if query %}
     <section class="grid three" style="margin-top:1rem">
       <article class="card">

@@ -10,6 +10,7 @@
   <div class="split">
     <section class="card">
       <form method="post" class="stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="field">
           <label for="location_slug">Pickup location</label>
           <select id="location_slug" name="location_slug" onchange="window.location.href='{{ url_for('pickup') }}?location_slug=' + encodeURIComponent(this.value)">

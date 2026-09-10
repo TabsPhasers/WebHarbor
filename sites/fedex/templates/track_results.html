@@ -8,7 +8,9 @@
     </div>
     <a href="{{ url_for('track') }}">Track again</a>
   </section>
-  {% if numbers and not records %}
+  {% if query_rejected %}
+    <div class="empty-state" role="status">That tracking request is longer than this local demo accepts. Enter up to 30 tracking numbers, separated by commas.</div>
+  {% elif numbers and not records %}
     <div class="empty-state">No tracking numbers matched your request. Check the numbers and try again.</div>
   {% endif %}
   {% if records %}

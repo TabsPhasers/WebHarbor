@@ -30,6 +30,7 @@
       <h2>{{ selected_quote.price|money if selected_quote else "$0.00" }}</h2>
       <p class="muted">{{ service.summary }}</p>
       <form method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="submit" value="Create mock shipment">
       </form>
     </aside>

@@ -10,6 +10,7 @@
   <div class="split">
     <section class="card">
       <form method="post" class="stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="field">
           <label for="tracking_numbers">Tracking numbers</label>
           <textarea id="tracking_numbers" name="tracking_numbers" placeholder="Enter tracking numbers" required></textarea>

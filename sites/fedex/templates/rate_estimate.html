@@ -10,6 +10,7 @@
   <div class="split">
     <section class="card">
       <form method="post" class="stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-grid two">
           <div class="field">
             <label for="origin_state">Origin state</label>
@@ -36,7 +37,7 @@
           <div class="field">
             <label for="package_type">Package type</label>
             <select id="package_type" name="package_type">
-              {% for option in ["Envelope", "Box", "Tube", "Pak", "Freight pallet"] %}
+              {% for option in package_types %}
                 <option value="{{ option }}" {% if form_state.package_type == option %}selected{% endif %}>{{ option }}</option>
               {% endfor %}
             </select>

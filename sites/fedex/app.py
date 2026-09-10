@@ -2,13 +2,18 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
+import secrets
+import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from flask import (
     Flask,
+    abort,
     flash,
     jsonify,
     redirect,
@@ -26,32 +31,104 @@ from flask_login import (
     logout_user,
 )
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import or_
+from flask_wtf.csrf import CSRFProtect
+from email_validator import EmailNotValidError, validate_email
+from sqlalchemy import event as sqlalchemy_event
+from sqlalchemy import func, or_
+from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from rate_quote import QuoteRequest, issue_quote_token, verify_quote_token
+from shipping_rules import (
+    DEMO_INVOICE_DUE_DATE,
+    DEMO_SHIP_DATE,
+    LABEL_CREATED_STATUS,
+    LABEL_CREATED_SUMMARY,
+    delivery_estimate,
+    initial_timeline,
+    plan_account_number,
+    plan_pickup_code,
+    plan_shipment_identifiers,
+    quote_price,
+    shipment_zone,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
+
+# seed_data imports these models by module name, including when this file is
+# launched as a script. Registering the alias keeps one Flask app and one
+# SQLAlchemy instance instead of building a second set under the name "app".
+if __name__ == "__main__":
+    sys.modules["app"] = sys.modules[__name__]
+
 INSTANCE_DIR = BASE_DIR / "instance"
 DB_PATH = INSTANCE_DIR / "fedex.db"
 INSTANCE_DIR.mkdir(parents=True, exist_ok=True)
 
+# Upper bound for a request body. The shipping and pickup forms are small, so a
+# larger body is a client error rather than something to buffer.
+MAX_CONTENT_LENGTH = 256 * 1024
+
 app = Flask(__name__, instance_path=str(INSTANCE_DIR))
-app.config["SECRET_KEY"] = "webharbor-fedex-demo-key"
+app.config["SECRET_KEY"] = os.environ.get("FEDEX_SECRET_KEY") or secrets.token_hex(32)
 app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("FEDEX_DATABASE_URI", f"sqlite:///{DB_PATH}")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["WTF_CSRF_TIME_LIMIT"] = None
+app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
 db = SQLAlchemy(app)
+
+
+@sqlalchemy_event.listens_for(Engine, "connect")
+def enable_sqlite_foreign_keys(connection, _record):
+    cursor = connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
+
 login_manager = LoginManager(app)
 login_manager.login_view = "login"
 login_manager.login_message = "Sign in to use this local FedEx demo."
 login_manager.login_message_category = "info"
+csrf = CSRFProtect(app)
 
 DEMO_PASSWORD = "TestPass123!"
 STATE_LABELS = [
     "CA", "WA", "TX", "FL", "NY", "GA", "IL", "PA",
     "MA", "CO", "AZ", "OR", "NC", "OH", "MI", "VA", "DC",
 ]
+PACKAGE_TYPES = ("Envelope", "Box", "Tube", "Pak", "Freight pallet")
+PICKUP_MODES = (
+    ("dropoff", "Drop off at staffed location"),
+    ("pickup", "Schedule courier pickup"),
+    ("dropbox", "Use after-hours drop box"),
+)
+PICKUP_MODE_VALUES = tuple(value for value, _label in PICKUP_MODES)
+DEMO_SHIPMENT_LABEL = "Local demo shipment"
+
+
+# Field limits for every persisted user-supplied value. SQLite does not
+# enforce declared VARCHAR lengths, so the application bounds them explicitly.
+MAX_NAME = 80
+MAX_TEXT = 120
+MAX_CITY = 100
+MAX_PHONE = 40
+MAX_ZIP = 20
+MAX_EMAIL = 120
+MAX_QUERY = 180
+MAX_TRACKING_INPUT = 400
+MAX_TRACKING_NUMBERS = 30
+MIN_WEIGHT_LB = 0.1
+MIN_PASSWORD = 8
+MAX_PASSWORD = 200
+MAX_WEIGHT_LB = 1000.0
+MAX_DECLARED_VALUE = 1000000.0
+MAX_PACKAGE_COUNT = 20
+PHONE_PATTERN = re.compile(r"^[0-9+().\- ]{7,40}$")
+ZIP_PATTERN = re.compile(r"^[0-9]{5}(?:-[0-9]{4})?$")
 
 
 def dumps_json(value: Any) -> str:
@@ -114,7 +191,6 @@ class ServiceLevel(db.Model):
     zone_surcharge = db.Column(db.Float, nullable=False)
     weekend_delivery = db.Column(db.Boolean, default=False)
     money_back_label = db.Column(db.String(120), default="")
-    icon_path = db.Column(db.String(255), default="")
     sort_order = db.Column(db.Integer, default=0)
 
 
@@ -132,7 +208,6 @@ class Location(db.Model):
     hours = db.Column(db.String(120), default="")
     services_json = db.Column(db.Text, default="[]")
     amenities_json = db.Column(db.Text, default="[]")
-    image_path = db.Column(db.String(255), default="")
     pickup_note = db.Column(db.String(180), default="")
 
     pickup_slots = db.relationship("PickupSlot", backref="location", cascade="all, delete-orphan")
@@ -174,6 +249,12 @@ class TrackingRecord(db.Model):
 
     shipment = db.relationship("Shipment", backref="tracking_record", uselist=False)
     events = db.relationship("TrackingEvent", backref="tracking_record", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        # One tracking record per shipment keeps the shipment-to-record
+        # relationship one-to-one in the database, not only by convention.
+        db.UniqueConstraint("shipment_id", name="uq_tracking_records_shipment_id"),
+    )
 
 
 class TrackingEvent(db.Model):
@@ -293,14 +374,106 @@ class SearchLog(db.Model):
     created_on = db.Column(db.String(20), nullable=False)
 
 
+class SeedMetadata(db.Model):
+    """Records which source built this database.
+
+    A verifier can therefore reject a database produced by different code instead
+    of grading against stale expectations.
+    """
+
+    __tablename__ = "seed_metadata"
+
+    key = db.Column(db.String(60), primary_key=True)
+    value = db.Column(db.String(120), nullable=False)
+
+
 @login_manager.user_loader
 def load_user(user_id: str) -> User | None:
-    return db.session.get(User, int(user_id))
+    try:
+        key = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    return db.session.get(User, key)
 
 
 @app.template_filter("money")
 def money(value: float) -> str:
     return f"${value:,.2f}"
+
+
+def location_exists(slug: str) -> bool:
+    return bool(slug) and Location.query.filter_by(slug=slug).first() is not None
+
+
+def bounded_text(value: Any, limit: int) -> str | None:
+    """Return a stripped string within `limit`, or None when unusable."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if len(text) > limit:
+        return None
+    return text
+
+
+def valid_email(value: str) -> bool:
+    # This site is an offline demo, so deliverability is not checked and the
+    # RFC 6761 special-use names are accepted: email_validator documents
+    # test_environment as the switch for application-level test environments,
+    # and rejecting "@*.test" here would only surprise a demo user.
+    try:
+        validate_email(value, check_deliverability=False, test_environment=True)
+    except EmailNotValidError:
+        return False
+    return len(value) <= MAX_EMAIL
+
+
+def valid_state(value: str) -> bool:
+    return value in STATE_LABELS
+
+
+def finite_float(value: Any, minimum: float, maximum: float) -> float | None:
+    """Parse a finite float within [minimum, maximum], else None."""
+    try:
+        number = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number < minimum or number > maximum:
+        return None
+    return number
+
+
+def bounded_int(value: Any, minimum: int, maximum: int) -> int | None:
+    try:
+        number = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    if number < minimum or number > maximum:
+        return None
+    return number
+
+
+def safe_redirect(value: Any, fallback: str) -> str:
+    """Accept only same-origin local paths, matching the Compass convention."""
+    if not value or not isinstance(value, str):
+        return fallback
+    try:
+        target = urlsplit(value)
+        origin = urlsplit(request.host_url)
+        if target.scheme or target.netloc:
+            if (target.scheme, target.netloc) != (origin.scheme, origin.netloc):
+                return fallback
+        if not target.path.startswith("/") or target.path.startswith("//"):
+            return fallback
+        return target.path + ("?" + target.query if target.query else "")
+    except ValueError:
+        return fallback
+
+
+def column_values(model: Any, column: Any) -> list[str]:
+    """Return every stored value of one identifier column."""
+    return [str(value) for (value,) in db.session.query(column).all() if value is not None]
 
 
 def ship_state() -> dict[str, Any]:
@@ -328,27 +501,17 @@ def normalize_tracking_inputs(raw: str) -> list[str]:
     return [token for token in tokens if token]
 
 
-def shipment_zone(origin_state: str, destination_state: str) -> int:
-    if origin_state == destination_state:
-        return 1
-    west = {"CA", "WA", "OR", "AZ", "CO"}
-    east = {"NY", "MA", "PA", "FL", "GA", "NC", "VA"}
-    central = {"TX", "IL", "OH", "MI"}
-    if origin_state in west and destination_state in west:
-        return 2
-    if origin_state in east and destination_state in east:
-        return 2
-    if origin_state in central and destination_state in central:
-        return 2
-    return 4
-
-
 def build_rate_quotes(origin_state: str, destination_state: str, weight_lb: float, package_type: str) -> list[dict[str, Any]]:
+    """Build the displayed quote cards from the seeded service levels.
+
+    The zone and price rules live in `shipping_rules` so the site and its
+    verifiers compute identical values from the same seeded rate columns.
+    """
     zone = shipment_zone(origin_state, destination_state)
-    package_fee = {"Envelope": 0, "Box": 8, "Tube": 10, "Freight pallet": 48}.get(package_type, 6)
     quotes = []
     for service in ServiceLevel.query.order_by(ServiceLevel.sort_order.asc()).all():
-        price = round(service.base_rate + service.per_lb_rate * weight_lb + service.zone_surcharge * zone + package_fee, 2)
+        price = quote_price(service.base_rate, service.per_lb_rate, service.zone_surcharge,
+                            weight_lb, package_type, zone)
         quotes.append(
             {
                 "service": service,
@@ -358,6 +521,123 @@ def build_rate_quotes(origin_state: str, destination_state: str, weight_lb: floa
             }
         )
     return quotes
+
+
+def validate_ship_form(form: Any, user: "User") -> tuple[dict[str, Any], list[str]]:
+    """Validate the shipment-details form.
+
+    Returns the normalized draft that is safe to keep in the session plus the
+    list of user-facing errors. Only bounded, typed, reference-checked values are
+    stored, so a later step can never read an unparsable draft.
+    """
+    errors: list[str] = []
+    draft: dict[str, Any] = {}
+
+    recipient = bounded_text(form.get("recipient_name"), MAX_NAME)
+    if not recipient:
+        errors.append(f"Enter a recipient name of up to {MAX_NAME} characters.")
+    draft["recipient_name"] = recipient or ""
+
+    origin_city = bounded_text(form.get("origin_city"), MAX_CITY)
+    if origin_city is None:
+        errors.append(f"Enter an origin city of up to {MAX_CITY} characters.")
+        origin_city = ""
+    if not origin_city:
+        origin_city = (user.city or "").strip()[:MAX_CITY]
+    if not origin_city:
+        errors.append("Enter an origin city.")
+    draft["origin_city"] = origin_city
+
+    destination_city = bounded_text(form.get("destination_city"), MAX_CITY)
+    if not destination_city:
+        errors.append(f"Enter a destination city of up to {MAX_CITY} characters.")
+    draft["destination_city"] = destination_city or ""
+
+    origin_state = bounded_text(form.get("origin_state"), 2)
+    destination_state = bounded_text(form.get("destination_state"), 2)
+    if not origin_state or not valid_state(origin_state):
+        errors.append("Choose a valid origin state.")
+    if not destination_state or not valid_state(destination_state):
+        errors.append("Choose a valid destination state.")
+    draft["origin_state"] = origin_state or ""
+    draft["destination_state"] = destination_state or ""
+
+    package_type = bounded_text(form.get("package_type"), MAX_TEXT)
+    if package_type not in PACKAGE_TYPES:
+        errors.append("Choose one of the listed package types.")
+    draft["package_type"] = package_type if package_type in PACKAGE_TYPES else "Box"
+
+    pickup_mode = bounded_text(form.get("pickup_mode"), MAX_TEXT)
+    if pickup_mode not in PICKUP_MODE_VALUES:
+        errors.append("Choose one of the listed handoff modes.")
+    draft["pickup_mode"] = pickup_mode if pickup_mode in PICKUP_MODE_VALUES else "dropoff"
+
+    weight = finite_float(form.get("weight_lb"), MIN_WEIGHT_LB, MAX_WEIGHT_LB)
+    if weight is None:
+        errors.append(f"Enter a weight between {MIN_WEIGHT_LB:g} and {MAX_WEIGHT_LB:g} lb.")
+    draft["weight_lb"] = weight if weight is not None else 0.0
+
+    declared_value = finite_float(form.get("declared_value"), 0.0, MAX_DECLARED_VALUE)
+    if declared_value is None:
+        errors.append(f"Enter a declared value between 0 and {MAX_DECLARED_VALUE:,.0f}.")
+    draft["declared_value"] = declared_value if declared_value is not None else 0.0
+
+    preferred = bounded_text(user.preferred_location_slug, MAX_TEXT) or ""
+    draft["pickup_location_slug"] = preferred if preferred and location_exists(preferred) else ""
+    return draft, errors
+
+
+def validated_ship_draft(state: Any, user: "User") -> tuple[dict[str, Any] | None, list[str]]:
+    """Re-validate a stored shipment draft before a later step uses it.
+
+    Every step re-checks the draft instead of trusting the session, so a stale or
+    hand-edited session can never reach a float conversion or a database write.
+    """
+    restart = ["Start with shipment details again."]
+    if not isinstance(state, dict) or not state:
+        return None, restart
+    recipient = bounded_text(state.get("recipient_name"), MAX_NAME)
+    origin_city = bounded_text(state.get("origin_city"), MAX_CITY)
+    destination_city = bounded_text(state.get("destination_city"), MAX_CITY)
+    origin_state = bounded_text(state.get("origin_state"), 2)
+    destination_state = bounded_text(state.get("destination_state"), 2)
+    package_type = bounded_text(state.get("package_type"), MAX_TEXT)
+    pickup_mode = bounded_text(state.get("pickup_mode"), MAX_TEXT)
+    weight = state.get("weight_lb")
+    declared_value = state.get("declared_value")
+    if not recipient or not origin_city or not destination_city:
+        return None, restart
+    if not origin_state or not valid_state(origin_state):
+        return None, restart
+    if not destination_state or not valid_state(destination_state):
+        return None, restart
+    if package_type not in PACKAGE_TYPES or pickup_mode not in PICKUP_MODE_VALUES:
+        return None, restart
+    if isinstance(weight, bool) or not isinstance(weight, (int, float)) or not math.isfinite(weight) \
+            or not MIN_WEIGHT_LB <= float(weight) <= MAX_WEIGHT_LB:
+        return None, restart
+    if isinstance(declared_value, bool) or not isinstance(declared_value, (int, float)) \
+            or not math.isfinite(declared_value) or not 0.0 <= float(declared_value) <= MAX_DECLARED_VALUE:
+        return None, restart
+    pickup_slug = bounded_text(state.get("pickup_location_slug"), MAX_TEXT) or ""
+    if pickup_slug and not location_exists(pickup_slug):
+        pickup_slug = ""
+    if not pickup_slug:
+        preferred = bounded_text(user.preferred_location_slug, MAX_TEXT) or ""
+        if preferred and location_exists(preferred):
+            pickup_slug = preferred
+    return {
+        "recipient_name": recipient,
+        "origin_city": origin_city,
+        "origin_state": origin_state,
+        "destination_city": destination_city,
+        "destination_state": destination_state,
+        "package_type": package_type,
+        "pickup_mode": pickup_mode,
+        "weight_lb": float(weight),
+        "declared_value": float(declared_value),
+        "pickup_location_slug": pickup_slug,
+    }, []
 
 
 def current_pickups() -> list[PickupRequest]:
@@ -380,6 +660,9 @@ def inject_globals() -> dict[str, Any]:
     return {
         "demo_password": DEMO_PASSWORD,
         "state_labels": STATE_LABELS,
+        "package_types": PACKAGE_TYPES,
+        "pickup_modes": PICKUP_MODES,
+        "all_locations": locations,
         "nav_locations": locations[:5],
         "nav_services": services,
         "nav_pickups": account_links,
@@ -405,23 +688,36 @@ def index():
 @app.route("/track", methods=["GET", "POST"])
 def track():
     if request.method == "POST":
-        numbers = request.form.get("tracking_numbers", "").strip()
+        numbers = request.form.get("tracking_numbers", "")
+        numbers = numbers.strip() if isinstance(numbers, str) else ""
+        if len(numbers) > MAX_TRACKING_INPUT:
+            flash(f"Enter at most {MAX_TRACKING_NUMBERS} tracking numbers.", "danger")
+            return render_template("track.html"), 400
         return redirect(url_for("track_results", numbers=numbers))
     return render_template("track.html")
 
 
 @app.route("/track/results")
 def track_results():
-    numbers = normalize_tracking_inputs(request.args.get("numbers", ""))
+    raw = request.args.get("numbers", "")
+    rejected = not isinstance(raw, str) or len(raw) > MAX_TRACKING_INPUT
+    numbers = [] if rejected else normalize_tracking_inputs(raw)
+    if len(numbers) > MAX_TRACKING_NUMBERS:
+        rejected = True
+        numbers = []
     records = []
     if numbers:
-        records = TrackingRecord.query.filter(TrackingRecord.tracking_number.in_(numbers)).all()
-        records.sort(key=lambda record: numbers.index(record.tracking_number))
-    return render_template("track_results.html", numbers=numbers, records=records)
+        found = TrackingRecord.query.filter(TrackingRecord.tracking_number.in_(numbers)).all()
+        by_number = {record.tracking_number: record for record in found}
+        records = [by_number[number] for number in numbers if number in by_number]
+    return render_template("track_results.html", numbers=numbers, records=records,
+                           query_rejected=rejected)
 
 
 @app.route("/tracking/<tracking_number>")
 def tracking_detail(tracking_number: str):
+    if len(tracking_number) > 30:
+        abort(404)
     record = TrackingRecord.query.filter_by(tracking_number=tracking_number.upper()).first_or_404()
     service = ServiceLevel.query.filter_by(slug=record.service_slug).first()
     events = TrackingEvent.query.filter_by(tracking_record_id=record.id).order_by(TrackingEvent.sequence.asc()).all()
@@ -431,12 +727,13 @@ def tracking_detail(tracking_number: str):
 @app.route("/rate-estimate", methods=["GET", "POST"])
 def rate_estimate():
     quotes = None
-    form_state = {
+    raw_state = {
         "origin_state": request.values.get("origin_state", "CA"),
         "destination_state": request.values.get("destination_state", "TX"),
         "weight_lb": request.values.get("weight_lb", "8"),
         "package_type": request.values.get("package_type", "Box"),
     }
+    form_state = {key: (value if isinstance(value, str) else "") for key, value in raw_state.items()}
     if request.method == "GET" and request.args.get("quote"):
         quote_request = verify_quote_token(request.args["quote"])
         if quote_request is None:
@@ -455,20 +752,25 @@ def rate_estimate():
                 quote_request.package_type,
             )
     elif request.method == "POST":
-        try:
-            weight = float(form_state["weight_lb"])
-            if weight <= 0:
-                raise ValueError
-        except (TypeError, ValueError):
-            flash("Enter a weight greater than 0.", "danger")
+        weight = finite_float(form_state["weight_lb"], MIN_WEIGHT_LB, MAX_WEIGHT_LB)
+        origin = bounded_text(form_state["origin_state"], 2)
+        destination = bounded_text(form_state["destination_state"], 2)
+        package_type = bounded_text(form_state["package_type"], MAX_TEXT)
+        if weight is None:
+            flash(f"Enter a weight between {MIN_WEIGHT_LB:g} and {MAX_WEIGHT_LB:g} lb.", "danger")
+        elif not (origin and valid_state(origin) and destination and valid_state(destination)):
+            flash("Choose a valid origin and destination state.", "danger")
+        elif package_type not in PACKAGE_TYPES:
+            flash("Choose one of the listed package types.", "danger")
         else:
             quote_request = QuoteRequest(
-                origin_state=form_state["origin_state"],
-                destination_state=form_state["destination_state"],
+                origin_state=origin,
+                destination_state=destination,
                 weight_lb=weight,
-                package_type=form_state["package_type"],
+                package_type=package_type,
             )
             return redirect(url_for("rate_estimate", quote=issue_quote_token(quote_request)))
+        return render_template("rate_estimate.html", quotes=quotes, form_state=form_state), 400
     return render_template("rate_estimate.html", quotes=quotes, form_state=form_state)
 
 
@@ -477,31 +779,19 @@ def rate_estimate():
 def ship():
     state = ship_state()
     if request.method == "POST":
-        state["recipient_name"] = request.form.get("recipient_name", "").strip()
-        state["origin_city"] = request.form.get("origin_city", current_user.city).strip()
-        state["origin_state"] = request.form.get("origin_state", current_user.state).strip()
-        state["destination_city"] = request.form.get("destination_city", "").strip()
-        state["destination_state"] = request.form.get("destination_state", "").strip()
-        state["package_type"] = request.form.get("package_type", "Box")
-        state["weight_lb"] = request.form.get("weight_lb", "8").strip()
-        state["declared_value"] = request.form.get("declared_value", "150").strip()
-        state["pickup_mode"] = request.form.get("pickup_mode", "dropoff")
+        submitted, errors = validate_ship_form(request.form, current_user)
+        if errors:
+            # Keep nothing in the session: a draft that failed validation must not
+            # become a later step's input. Re-rendering with the submitted values
+            # still preserves what the user typed.
+            state.clear()
+            session.modified = True
+            for message in errors:
+                flash(message, "danger")
+            return render_template("ship.html", state=submitted), 400
+        state.clear()
+        state.update(submitted)
         session.modified = True
-        valid_numbers = True
-        try:
-            if float(state["weight_lb"]) <= 0:
-                raise ValueError
-        except (TypeError, ValueError):
-            flash("Enter a weight greater than 0.", "danger")
-            valid_numbers = False
-        try:
-            if float(state["declared_value"]) < 0:
-                raise ValueError
-        except (TypeError, ValueError):
-            flash("Enter a declared value of at least 0.", "danger")
-            valid_numbers = False
-        if not valid_numbers:
-            return render_template("ship.html", state=state)
         return redirect(url_for("ship_service"))
     return render_template("ship.html", state=state)
 
@@ -510,17 +800,22 @@ def ship():
 @login_required
 def ship_service():
     state = ship_state()
-    if not state.get("recipient_name"):
-        flash("Start with shipment details first.", "warning")
+    draft, errors = validated_ship_draft(state, current_user)
+    if draft is None:
+        state.clear()
+        session.modified = True
+        for message in errors:
+            flash(message, "warning")
         return redirect(url_for("ship"))
-    quotes = build_rate_quotes(
-        state.get("origin_state", current_user.state or "CA"),
-        state.get("destination_state", "TX"),
-        float(state.get("weight_lb", "8")),
-        state.get("package_type", "Box"),
-    )
+    quotes = build_rate_quotes(draft["origin_state"], draft["destination_state"],
+                               draft["weight_lb"], draft["package_type"])
     if request.method == "POST":
-        state["service_slug"] = request.form.get("service_slug", "priority-overnight")
+        slug = bounded_text(request.form.get("service_slug"), MAX_TEXT)
+        service = ServiceLevel.query.filter_by(slug=slug).first() if slug else None
+        if service is None:
+            flash("Choose one of the listed service levels.", "danger")
+            return render_template("ship_service.html", state=state, quotes=quotes), 400
+        state["service_slug"] = service.slug
         session.modified = True
         return redirect(url_for("ship_review"))
     return render_template("ship_service.html", state=state, quotes=quotes)
@@ -530,47 +825,67 @@ def ship_service():
 @login_required
 def ship_review():
     state = ship_state()
-    if not state.get("service_slug"):
+    draft, errors = validated_ship_draft(state, current_user)
+    if draft is None:
+        state.clear()
+        session.modified = True
+        for message in errors:
+            flash(message, "warning")
+        return redirect(url_for("ship"))
+    slug = bounded_text(state.get("service_slug"), MAX_TEXT)
+    service = ServiceLevel.query.filter_by(slug=slug).first() if slug else None
+    if service is None:
+        state.pop("service_slug", None)
+        session.modified = True
         flash("Choose a service level first.", "warning")
         return redirect(url_for("ship_service"))
-    service = ServiceLevel.query.filter_by(slug=state["service_slug"]).first_or_404()
-    quotes = build_rate_quotes(
-        state.get("origin_state", current_user.state or "CA"),
-        state.get("destination_state", "TX"),
-        float(state.get("weight_lb", "8")),
-        state.get("package_type", "Box"),
-    )
+    quotes = build_rate_quotes(draft["origin_state"], draft["destination_state"],
+                               draft["weight_lb"], draft["package_type"])
     selected_quote = next((quote for quote in quotes if quote["service"].slug == service.slug), None)
-    if request.method == "POST":
-        next_index = (db.session.query(db.func.count(Shipment.id)).scalar() or 0) + 1
-        shipment_code = f"SH-{260000 + next_index}"
-        tracking_number = f"FDX{260000000 + next_index:09d}"
-        invoice_number = f"INV-{260000 + next_index}"
-        total_cost = selected_quote["price"] if selected_quote else 0.0
+    if request.method != "POST":
+        return render_template(
+            "ship_review.html",
+            state=state,
+            service=service,
+            selected_quote=selected_quote,
+        )
+
+    total_cost = selected_quote["price"] if selected_quote else 0.0
+    pickup_slug = draft["pickup_location_slug"]
+    for attempt in range(3):
+        shipment_code, tracking_number, invoice_number = plan_shipment_identifiers(
+            column_values(Shipment, Shipment.shipment_code),
+            column_values(TrackingRecord, TrackingRecord.tracking_number),
+            column_values(Invoice, Invoice.invoice_number),
+        )
         shipment = Shipment(
             shipment_code=shipment_code,
             tracking_number=tracking_number,
             user_id=current_user.id,
             service_slug=service.slug,
-            package_type=state.get("package_type", "Box"),
-            package_weight=float(state.get("weight_lb", "8")),
-            origin_city=state.get("origin_city", current_user.city),
-            origin_state=state.get("origin_state", current_user.state),
-            destination_city=state.get("destination_city", "Dallas"),
-            destination_state=state.get("destination_state", "TX"),
-            recipient_name=state.get("recipient_name", "Demo Recipient"),
-            declared_value=float(state.get("declared_value", "150")),
+            package_type=draft["package_type"],
+            package_weight=draft["weight_lb"],
+            origin_city=draft["origin_city"],
+            origin_state=draft["origin_state"],
+            destination_city=draft["destination_city"],
+            destination_state=draft["destination_state"],
+            recipient_name=draft["recipient_name"],
+            declared_value=draft["declared_value"],
             total_cost=total_cost,
-            fulfillment_mode=state.get("pickup_mode", "dropoff"),
-            pickup_location_slug=state.get("pickup_location_slug", current_user.preferred_location_slug),
-            pickup_window=state.get("pickup_window", ""),
-            status="Label created",
-            created_on="2026-06-04",
+            fulfillment_mode=draft["pickup_mode"],
+            pickup_location_slug=pickup_slug,
+            pickup_window="",
+            status=LABEL_CREATED_STATUS,
+            created_on=DEMO_SHIP_DATE,
             invoice_number=invoice_number,
-            reference_label="Local demo shipment",
+            reference_label=DEMO_SHIPMENT_LABEL,
         )
         db.session.add(shipment)
-        db.session.flush()
+        try:
+            db.session.flush()
+        except IntegrityError:
+            db.session.rollback()
+            continue
         tracking = TrackingRecord(
             tracking_number=tracking_number,
             shipment_id=shipment.id,
@@ -584,58 +899,55 @@ def ship_review():
             service_slug=shipment.service_slug,
             package_type=shipment.package_type,
             weight_lb=shipment.package_weight,
-            status_stage="Label created",
-            status_summary="Shipment information sent to local FedEx demo systems.",
-            ship_date="2026-06-04",
-            estimated_delivery="2026-06-06 by 8:00 PM",
-            latest_scan="Label created",
+            status_stage=LABEL_CREATED_STATUS,
+            status_summary=LABEL_CREATED_SUMMARY,
+            ship_date=DEMO_SHIP_DATE,
+            estimated_delivery=delivery_estimate(service.slug, DEMO_SHIP_DATE),
+            latest_scan=LABEL_CREATED_STATUS,
             package_count=1,
             signature_required=False,
-            dropoff_location_slug=shipment.pickup_location_slug,
+            dropoff_location_slug=pickup_slug,
         )
         db.session.add(tracking)
-        db.session.flush()
+        try:
+            db.session.flush()
+        except IntegrityError:
+            db.session.rollback()
+            continue
         db.session.add_all(
             [
                 TrackingEvent(
                     tracking_record_id=tracking.id,
-                    sequence=1,
-                    event_time="2026-06-04 09:00",
-                    location_label=f"{shipment.origin_city}, {shipment.origin_state}",
-                    status_label="Label created",
-                    details="Shipment information sent to local demo systems.",
-                ),
-                TrackingEvent(
-                    tracking_record_id=tracking.id,
-                    sequence=2,
-                    event_time="2026-06-04 11:30",
-                    location_label=f"{shipment.origin_city}, {shipment.origin_state}",
-                    status_label="Picked up",
-                    details="Package picked up in the demo handoff flow.",
-                ),
+                    sequence=event["sequence"],
+                    event_time=event["event_time"],
+                    location_label=event["location_label"],
+                    status_label=event["status_label"],
+                    details=event["details"],
+                )
+                for event in initial_timeline(shipment.origin_city, shipment.origin_state, DEMO_SHIP_DATE)
             ]
         )
-        invoice = Invoice(
-            invoice_number=invoice_number,
-            user_id=current_user.id,
-            shipment_id=shipment.id,
-            billed_on="2026-06-04",
-            due_date="2026-06-18",
-            amount=total_cost,
-            status="Open",
+        db.session.add(
+            Invoice(
+                invoice_number=invoice_number,
+                user_id=current_user.id,
+                shipment_id=shipment.id,
+                billed_on=DEMO_SHIP_DATE,
+                due_date=DEMO_INVOICE_DUE_DATE,
+                amount=total_cost,
+                status="Open",
+            )
         )
-        db.session.add(invoice)
-        db.session.commit()
-        session["shipment_confirmation_code"] = shipment_code
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            continue
         clear_ship_state()
         session["shipment_confirmation_code"] = shipment_code
         return redirect(url_for("ship_confirmation"))
-    return render_template(
-        "ship_review.html",
-        state=state,
-        service=service,
-        selected_quote=selected_quote,
-    )
+    flash("That mock shipment could not be saved. Please submit the flow again.", "danger")
+    return redirect(url_for("ship_review")), 409
 
 
 @app.route("/ship/confirmation")
@@ -653,42 +965,73 @@ def ship_confirmation():
 @login_required
 def pickup():
     locations = Location.query.order_by(Location.city.asc()).all()
-    selected_slug = request.values.get("location_slug", current_user.preferred_location_slug or locations[0].slug)
+    preferred = current_user.preferred_location_slug
+    default_slug = preferred if any(location.slug == preferred for location in locations) else (
+        locations[0].slug if locations else "")
+    selected_slug = bounded_text(request.values.get("location_slug"), MAX_TEXT) or default_slug
     location = Location.query.filter_by(slug=selected_slug).first()
+    if location is None:
+        location = next((item for item in locations if item.slug == default_slug), None)
+        selected_slug = location.slug if location else ""
     slots = []
     if location:
-        slots = PickupSlot.query.filter_by(location_id=location.id).order_by(PickupSlot.slot_date.asc()).all()
-    if request.method == "POST":
-        try:
-            package_count = int(request.form.get("package_count", "1"))
-            if package_count < 1:
-                raise ValueError
-        except (TypeError, ValueError):
-            flash("Enter a package count of at least 1.", "danger")
-            return render_template("pickup.html", locations=locations, selected_slug=selected_slug, slots=slots)
+        slots = (
+            PickupSlot.query.filter_by(location_id=location.id)
+            .order_by(PickupSlot.slot_date.asc(), PickupSlot.id.asc())
+            .all()
+        )
+    if request.method != "POST":
+        return render_template("pickup.html", locations=locations, selected_slug=selected_slug, slots=slots)
 
-        request_id = (db.session.query(db.func.count(PickupRequest.id)).scalar() or 0) + 1
-        slot = PickupSlot.query.filter_by(id=int(request.form.get("pickup_slot_id", "0"))).first_or_404()
+    package_count = bounded_int(request.form.get("package_count"), 1, MAX_PACKAGE_COUNT)
+    slot_id = bounded_int(request.form.get("pickup_slot_id"), 1, 1_000_000)
+    slot = PickupSlot.query.filter_by(id=slot_id).first() if slot_id else None
+    if package_count is None:
+        flash(f"Enter a package count between 1 and {MAX_PACKAGE_COUNT}.", "danger")
+        return render_template("pickup.html", locations=locations, selected_slug=selected_slug,
+                               slots=slots), 400
+    if slot is None or (location is not None and slot.location_id != location.id):
+        flash("Choose one of the pickup slots listed for that location.", "danger")
+        return render_template("pickup.html", locations=locations, selected_slug=selected_slug,
+                               slots=slots), 400
+    if (slot.remaining_capacity or 0) < 1:
+        flash("That pickup slot is fully booked. Choose another slot.", "danger")
+        return render_template("pickup.html", locations=locations, selected_slug=selected_slug,
+                               slots=slots), 409
+
+    for _attempt in range(3):
+        confirmation_code = plan_pickup_code(column_values(PickupRequest, PickupRequest.confirmation_code))
         pickup_request = PickupRequest(
-            confirmation_code=f"PU-{2600 + request_id:04d}",
+            confirmation_code=confirmation_code,
             user_id=current_user.id,
             location_id=slot.location_id,
             slot_date=slot.slot_date,
             time_window=slot.time_window,
             package_count=package_count,
             status="Scheduled",
-            created_on="2026-06-04",
+            created_on=DEMO_SHIP_DATE,
         )
+        slot.remaining_capacity = (slot.remaining_capacity or 0) - 1
         db.session.add(pickup_request)
-        db.session.commit()
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            slot = PickupSlot.query.filter_by(id=slot_id).first()
+            if slot is None:
+                break
+            continue
         flash(f"Pickup {pickup_request.confirmation_code} scheduled in this local demo.", "success")
         return redirect(url_for("account"))
-    return render_template("pickup.html", locations=locations, selected_slug=selected_slug, slots=slots)
+    flash("That pickup could not be scheduled. Please choose another slot.", "danger")
+    return redirect(url_for("pickup")), 409
 
 
 @app.route("/locations")
 def locations():
-    query = request.args.get("q", "").strip()
+    raw_query = request.args.get("q", "")
+    rejected = not isinstance(raw_query, str) or len(raw_query) > MAX_QUERY
+    query = "" if rejected else raw_query.strip()
     locations_query = Location.query
     if query:
         token_like = f"%{query}%"
@@ -701,7 +1044,8 @@ def locations():
             )
         )
     locations_list = locations_query.order_by(Location.state.asc(), Location.city.asc()).all()
-    return render_template("locations.html", locations=locations_list, query=query)
+    return render_template("locations.html", locations=locations_list, query=query,
+                           query_rejected=rejected)
 
 
 @app.route("/locations/<location_slug>")
@@ -713,12 +1057,14 @@ def location_detail(location_slug: str):
 
 @app.route("/support")
 def support():
-    query = request.args.get("q", "").strip()
+    raw_query = request.args.get("q", "")
+    rejected = not isinstance(raw_query, str) or len(raw_query) > MAX_QUERY
+    query = "" if rejected else raw_query.strip()
     articles_query = SupportArticle.query
     if query:
         articles_query = support_query(query)
     articles = articles_query.order_by(SupportArticle.category.asc(), SupportArticle.title.asc()).all()
-    return render_template("support.html", articles=articles, query=query)
+    return render_template("support.html", articles=articles, query=query, query_rejected=rejected)
 
 
 @app.route("/support/<article_slug>")
@@ -738,13 +1084,17 @@ def support_article(article_slug: str):
 
 @app.route("/search")
 def search():
-    query = request.args.get("q", "").strip()
+    raw_query = request.args.get("q", "")
+    if not isinstance(raw_query, str) or len(raw_query) > MAX_QUERY:
+        return render_template("search.html", query="", articles=[], locations=[], tracking_matches=[],
+                               query_rejected=True)
+    query = raw_query.strip()
     articles = []
     locations = []
     tracking_matches = []
+    # A read-only route must not write: browsing and searching leave the seeded
+    # database byte-identical so reset and read-only state grading stay exact.
     if query:
-        db.session.add(SearchLog(query=query, search_type="global", created_on="2026-06-04"))
-        db.session.commit()
         token_like = f"%{query}%"
         articles = support_query(query).limit(8).all()
         locations = Location.query.filter(
@@ -785,10 +1135,17 @@ def login():
     if current_user.is_authenticated:
         return redirect(url_for("account"))
     if request.method == "POST":
-        email = request.form.get("email", "").strip().lower()
+        raw_email = request.form.get("email", "")
+        email = raw_email.strip().lower() if isinstance(raw_email, str) else ""
         password = request.form.get("password", "")
+        password = password if isinstance(password, str) else ""
+        if len(email) > MAX_EMAIL or len(password) > MAX_PASSWORD:
+            flash("That demo sign-in did not match any seeded account.", "danger")
+            return render_template("login.html"), 400
         user = User.query.filter_by(email=email).first()
         if user and user.check_password(password):
+            # Drop any anonymous session data before establishing the new one.
+            session.clear()
             login_user(user)
             flash("Signed in to the local FedEx demo.", "success")
             return redirect(url_for("account"))
@@ -800,44 +1157,129 @@ def login():
 def register():
     if current_user.is_authenticated:
         return redirect(url_for("account"))
-    if request.method == "POST":
-        email = request.form.get("email", "").strip().lower()
-        first_name = request.form.get("first_name", "").strip()
-        last_name = request.form.get("last_name", "").strip()
-        password = request.form.get("password", "")
-        if not (first_name and last_name and password and re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email)):
-            flash("Enter your name, a valid email address, and a password.", "danger")
-            return render_template("register.html")
-        if User.query.filter_by(email=email).first():
-            flash("That email already exists in the local demo.", "warning")
-            return redirect(url_for("login"))
-        next_index = (db.session.query(db.func.count(User.id)).scalar() or 0) + 1
+    if request.method != "POST":
+        return render_template("register.html")
+
+    form, errors = validate_registration_form(request.form)
+    if errors:
+        for message in errors:
+            flash(message, "danger")
+        return render_template("register.html", form=form), 400
+    if User.query.filter_by(email=form["email"]).first():
+        flash("That email already exists in the local demo.", "warning")
+        return redirect(url_for("login"))
+
+    for _attempt in range(3):
+        account_number = plan_account_number(column_values(User, User.account_number))
         user = User(
-            email=email,
-            first_name=first_name,
-            last_name=last_name,
-            phone=request.form.get("phone", "").strip(),
-            company=request.form.get("company", "").strip(),
-            city=request.form.get("city", "").strip(),
-            state=request.form.get("state", "").strip(),
-            zip_code=request.form.get("zip_code", "").strip(),
-            account_number=f"5100{next_index:05d}",
-            preferred_location_slug=request.form.get("preferred_location_slug", "").strip(),
-            invoicing_email=email,
+            email=form["email"],
+            first_name=form["first_name"],
+            last_name=form["last_name"],
+            phone=form["phone"],
+            company=form["company"],
+            city=form["city"],
+            state=form["state"],
+            zip_code=form["zip_code"],
+            account_number=account_number,
+            preferred_location_slug=form["preferred_location_slug"],
+            invoicing_email=form["email"],
         )
-        user.set_password(password)
+        user.set_password(form["password"])
         db.session.add(user)
-        db.session.commit()
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            if User.query.filter_by(email=form["email"]).first():
+                flash("That email already exists in the local demo.", "warning")
+                return redirect(url_for("login"))
+            continue
+        session.clear()
         login_user(user)
         flash("Created a new local FedEx demo account.", "success")
         return redirect(url_for("account"))
-    return render_template("register.html")
+    flash("That account could not be created. Please submit the form again.", "danger")
+    return render_template("register.html", form=form), 409
 
 
-@app.route("/logout")
+def validate_registration_form(form: Any) -> tuple[dict[str, str], list[str]]:
+    """Validate the registration form and return normalized values plus errors."""
+    errors: list[str] = []
+    values: dict[str, str] = {}
+
+    raw_email = form.get("email", "")
+    email = raw_email.strip().lower() if isinstance(raw_email, str) else ""
+    if not email or len(email) > MAX_EMAIL or not valid_email(email):
+        errors.append("Enter a valid email address.")
+    values["email"] = email
+
+    first_name = bounded_text(form.get("first_name"), MAX_NAME)
+    last_name = bounded_text(form.get("last_name"), MAX_NAME)
+    if not first_name:
+        errors.append(f"Enter a first name of up to {MAX_NAME} characters.")
+    if not last_name:
+        errors.append(f"Enter a last name of up to {MAX_NAME} characters.")
+    values["first_name"] = first_name or ""
+    values["last_name"] = last_name or ""
+
+    password = form.get("password", "")
+    password = password if isinstance(password, str) else ""
+    if len(password) < MIN_PASSWORD or len(password) > MAX_PASSWORD:
+        errors.append(f"Enter a password between {MIN_PASSWORD} and {MAX_PASSWORD} characters.")
+    values["password"] = password
+
+    phone = bounded_text(form.get("phone", ""), MAX_PHONE)
+    if phone is None:
+        errors.append(f"Enter a phone number of up to {MAX_PHONE} characters.")
+        phone = ""
+    elif phone and not PHONE_PATTERN.fullmatch(phone):
+        errors.append("Enter a phone number using digits, spaces, and + ( ) - . only.")
+    values["phone"] = phone or ""
+
+    company = bounded_text(form.get("company", ""), MAX_TEXT)
+    if company is None:
+        errors.append(f"Enter a company of up to {MAX_TEXT} characters.")
+        company = ""
+    values["company"] = company or ""
+
+    city = bounded_text(form.get("city", ""), MAX_CITY)
+    if city is None:
+        errors.append(f"Enter a city of up to {MAX_CITY} characters.")
+        city = ""
+    values["city"] = city or ""
+
+    state = bounded_text(form.get("state", ""), 2)
+    if state is None or (state and not valid_state(state)):
+        errors.append("Choose a valid state.")
+        state = ""
+    values["state"] = state or ""
+
+    zip_code = bounded_text(form.get("zip_code", ""), MAX_ZIP)
+    if zip_code is None:
+        errors.append(f"Enter a ZIP code of up to {MAX_ZIP} characters.")
+        zip_code = ""
+    elif zip_code and not ZIP_PATTERN.fullmatch(zip_code):
+        errors.append("Enter a ZIP code as 5 digits, optionally followed by -4 digits.")
+    values["zip_code"] = zip_code or ""
+
+    slug = bounded_text(form.get("preferred_location_slug", ""), MAX_TEXT)
+    if slug is None:
+        errors.append("Choose one of the listed preferred locations.")
+        slug = ""
+    elif slug and not location_exists(slug):
+        errors.append("Choose one of the listed preferred locations.")
+        slug = ""
+    values["preferred_location_slug"] = slug or ""
+    return values, errors
+
+
+@app.route("/logout", methods=["POST"])
 @login_required
 def logout():
+    # A session change must not be reachable with GET or HEAD: browsers,
+    # prefetchers, and crawlers issue both without user intent.
     logout_user()
+    session.clear()
     flash("Signed out of the FedEx demo.", "info")
     return redirect(url_for("index"))
 
@@ -861,22 +1303,102 @@ def account():
 @app.route("/account/edit", methods=["GET", "POST"])
 @login_required
 def account_edit():
-    if request.method == "POST":
-        current_user.first_name = request.form.get("first_name", current_user.first_name).strip()
-        current_user.last_name = request.form.get("last_name", current_user.last_name).strip()
-        current_user.phone = request.form.get("phone", current_user.phone).strip()
-        current_user.company = request.form.get("company", current_user.company).strip()
-        current_user.city = request.form.get("city", current_user.city).strip()
-        current_user.state = request.form.get("state", current_user.state).strip()
-        current_user.zip_code = request.form.get("zip_code", current_user.zip_code).strip()
-        current_user.preferred_location_slug = request.form.get(
-            "preferred_location_slug", current_user.preferred_location_slug
-        ).strip()
-        current_user.invoicing_email = request.form.get("invoicing_email", current_user.invoicing_email).strip()
+    if request.method != "POST":
+        return render_template("account_edit.html", form=None, errors=[])
+    form, errors = validate_profile_form(request.form, current_user)
+    if errors:
+        for message in errors:
+            flash(message, "danger")
+        return render_template("account_edit.html", form=form, errors=errors), 400
+    current_user.first_name = form["first_name"]
+    current_user.last_name = form["last_name"]
+    current_user.phone = form["phone"]
+    current_user.company = form["company"]
+    current_user.city = form["city"]
+    current_user.state = form["state"]
+    current_user.zip_code = form["zip_code"]
+    current_user.preferred_location_slug = form["preferred_location_slug"]
+    current_user.invoicing_email = form["invoicing_email"]
+    try:
         db.session.commit()
-        flash("Saved your local FedEx profile updates.", "success")
-        return redirect(url_for("account"))
-    return render_template("account_edit.html")
+    except IntegrityError:
+        db.session.rollback()
+        flash("Those profile updates could not be saved. Please review the fields.", "danger")
+        return render_template("account_edit.html", form=form, errors=["conflict"]), 409
+    flash("Saved your local FedEx profile updates.", "success")
+    return redirect(url_for("account"))
+
+
+def validate_profile_form(form: Any, user: "User") -> tuple[dict[str, str], list[str]]:
+    """Validate the profile form.
+
+    SQLite does not enforce the declared VARCHAR lengths and the form's dropdowns
+    are only advisory, so every persisted field is bounded and reference-checked
+    here before it is written.
+    """
+    errors: list[str] = []
+    values: dict[str, str] = {}
+
+    first_name = bounded_text(form.get("first_name", user.first_name), MAX_NAME)
+    last_name = bounded_text(form.get("last_name", user.last_name), MAX_NAME)
+    if not first_name:
+        errors.append(f"Enter a first name of up to {MAX_NAME} characters.")
+    if not last_name:
+        errors.append(f"Enter a last name of up to {MAX_NAME} characters.")
+    values["first_name"] = first_name or ""
+    values["last_name"] = last_name or ""
+
+    phone = bounded_text(form.get("phone", user.phone), MAX_PHONE)
+    if phone is None:
+        errors.append(f"Enter a phone number of up to {MAX_PHONE} characters.")
+        phone = ""
+    elif phone and not PHONE_PATTERN.fullmatch(phone):
+        errors.append("Enter a phone number using digits, spaces, and + ( ) - . only.")
+    values["phone"] = phone or ""
+
+    company = bounded_text(form.get("company", user.company), MAX_TEXT)
+    if company is None:
+        errors.append(f"Enter a company of up to {MAX_TEXT} characters.")
+        company = ""
+    values["company"] = company or ""
+
+    city = bounded_text(form.get("city", user.city), MAX_CITY)
+    if city is None:
+        errors.append(f"Enter a city of up to {MAX_CITY} characters.")
+        city = ""
+    values["city"] = city or ""
+
+    state = bounded_text(form.get("state", user.state), 2)
+    if state is None or (state and not valid_state(state)):
+        errors.append("Choose a valid state.")
+        state = ""
+    values["state"] = state or ""
+
+    zip_code = bounded_text(form.get("zip_code", user.zip_code), MAX_ZIP)
+    if zip_code is None:
+        errors.append(f"Enter a ZIP code of up to {MAX_ZIP} characters.")
+        zip_code = ""
+    elif zip_code and not ZIP_PATTERN.fullmatch(zip_code):
+        errors.append("Enter a ZIP code as 5 digits, optionally followed by -4 digits.")
+    values["zip_code"] = zip_code or ""
+
+    slug = bounded_text(form.get("preferred_location_slug", user.preferred_location_slug), MAX_TEXT)
+    if slug is None:
+        errors.append("Choose one of the listed preferred locations.")
+        slug = ""
+    elif slug and not location_exists(slug):
+        errors.append("Choose one of the listed preferred locations.")
+        slug = ""
+    values["preferred_location_slug"] = slug or ""
+
+    invoicing_email = bounded_text(form.get("invoicing_email", user.invoicing_email), MAX_EMAIL)
+    if invoicing_email is None:
+        errors.append(f"Enter a billing email of up to {MAX_EMAIL} characters.")
+        invoicing_email = ""
+    elif invoicing_email and not valid_email(invoicing_email):
+        errors.append("Enter a valid billing email address.")
+    values["invoicing_email"] = invoicing_email or ""
+    return values, errors
 
 
 @app.route("/account/shipments")
@@ -889,18 +1411,30 @@ def account_shipments():
 @app.post("/account/shipments/<shipment_code>/remove")
 @login_required
 def account_shipment_remove(shipment_code: str):
+    if len(shipment_code) > 30:
+        abort(404)
     shipment = Shipment.query.filter_by(
         shipment_code=shipment_code,
         user_id=current_user.id,
-        reference_label="Local demo shipment",
+        reference_label=DEMO_SHIPMENT_LABEL,
     ).first_or_404()
     tracking = TrackingRecord.query.filter_by(shipment_id=shipment.id).first()
+    if tracking is not None and Claim.query.filter_by(tracking_number=tracking.tracking_number).first() is not None:
+        flash("That shipment has a claim on record, so it stays in your history.", "warning")
+        return redirect(url_for("account_shipments"))
     Invoice.query.filter_by(shipment_id=shipment.id).delete(synchronize_session=False)
     if tracking:
         TrackingEvent.query.filter_by(tracking_record_id=tracking.id).delete(synchronize_session=False)
         db.session.delete(tracking)
     db.session.delete(shipment)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        flash("That shipment could not be removed. Please try again.", "danger")
+        return redirect(url_for("account_shipments")), 409
+    if session.get("shipment_confirmation_code") == shipment_code:
+        session.pop("shipment_confirmation_code", None)
     flash(f"Removed local demo shipment {shipment_code}.", "success")
     return redirect(url_for("account_shipments"))
 
@@ -928,6 +1462,27 @@ def health():
             "locations": Location.query.count(),
         }
     )
+
+
+@app.errorhandler(404)
+def not_found(error):
+    return render_template("404.html"), 404
+
+
+@app.errorhandler(405)
+def method_not_allowed(error):
+    return render_template("404.html", message="That action is not available for this page."), 405
+
+
+@app.errorhandler(413)
+def request_too_large(error):
+    return render_template("404.html", message="That submission is larger than this local demo accepts."), 413
+
+
+@app.errorhandler(500)
+def server_error(error):
+    db.session.rollback()
+    return render_template("500.html"), 500
 
 
 def bootstrap_site() -> None:

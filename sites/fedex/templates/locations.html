@@ -11,13 +11,16 @@
     <form method="get" class="form-grid two">
       <div class="field">
         <label for="q">Search city, state, or location type</label>
-        <input id="q" name="q" value="{{ query }}" placeholder="Seattle, Ship Center, Office Print">
+        <input id="q" name="q" value="{{ query }}" placeholder="Seattle, Ship Center, Office Print" maxlength="180">
       </div>
       <div class="field" style="align-self:end">
         <input type="submit" value="Search locations">
       </div>
     </form>
   </section>
+  {% if query_rejected %}
+    <div class="empty-state" role="status">That location search is longer than this local demo accepts. Enter 180 characters or fewer.</div>
+  {% endif %}
   <section class="location-list" style="margin-top:1rem">
     {% for location in locations %}
       <article class="card media">

@@ -1,14 +1,28 @@
 #!/usr/bin/env python3
-"""Deterministic seed data and lightweight local assets for the FedEx mirror."""
+"""Deterministic seed data for the FedEx mirror.
+
+The seed is a pure function of this tracked source: running it twice produces
+byte-identical databases, which is what lets the container build generate
+`instance_seed/fedex.db` instead of shipping an opaque binary in the asset
+bundle. Benchmark-user password hashes therefore use a fixed per-account salt,
+while accounts registered at runtime still get a random salt.
+"""
 from __future__ import annotations
 
 import hashlib
 import os
 import shutil
 from pathlib import Path
-from xml.sax.saxutils import escape, quoteattr
 
 os.environ.setdefault("WEBSYN_SKIP_BOOTSTRAP", "1")
+
+# The generator must always build this checkout's canonical database. `app`
+# derives its engine URI from FEDEX_DATABASE_URI, while rebuild_seed_database()
+# copies from DB_PATH, so an ambient URI (for example one exported by a test
+# harness) would make the engine write somewhere else and the copy fail. Pin the
+# URI before `app` is imported, then assert that the two paths agree.
+_SEED_DB_PATH = Path(__file__).resolve().parent / "instance" / "fedex.db"
+os.environ["FEDEX_DATABASE_URI"] = f"sqlite:///{_SEED_DB_PATH}"
 
 from app import (  # noqa: E402
     BASE_DIR,
@@ -21,6 +35,7 @@ from app import (  # noqa: E402
     PickupRequest,
     PickupSlot,
     SearchLog,
+    SeedMetadata,
     ServiceLevel,
     Shipment,
     SupportArticle,
@@ -31,12 +46,40 @@ from app import (  # noqa: E402
     db,
     dumps_json,
 )
+from sqlalchemy import func  # noqa: E402
+from support_content import SUPPORT_CONTENT, article  # noqa: E402
+
+if DB_PATH != _SEED_DB_PATH:
+    raise RuntimeError(
+        f"seed generator path mismatch: app DB_PATH={DB_PATH} pinned={_SEED_DB_PATH}")
 
 INSTANCE_SEED_DIR = BASE_DIR / "instance_seed"
 INSTANCE_SEED_DB = INSTANCE_SEED_DIR / "fedex.db"
 STATIC_DIR = BASE_DIR / "static"
-IMAGE_DIR = STATIC_DIR / "images"
 EXTERNAL_CACHE_DIR = STATIC_DIR / "external_cache"
+
+# Version marker stored in the seed itself so a verifier can reject a database
+# that was built by different code instead of grading it silently.
+SEED_SCHEMA_VERSION = "fedex-source-v2"
+
+# Row counts the finished seed must contain. A seed that does not match these
+# exactly is rejected rather than shipped, so a partial build cannot become the
+# authoritative state for grading.
+EXPECTED_COUNTS = {
+    "users": 4,
+    "service_levels": 5,
+    "locations": 15,
+    "pickup_slots": 45,
+    "pickup_requests": 8,
+    "shipments": 60,
+    "tracking_records": 72,
+    "tracking_events": 360,
+    "invoices": 60,
+    "claims": 12,
+    "support_articles": 18,
+    "search_logs": 3,
+    "seed_metadata": 1,
+}
 
 BENCHMARK_USERS = [
     {
@@ -195,79 +238,23 @@ SUPPORT_ARTICLES = [
     ("Weather delay guidance", "weather-delay-guidance", "Tracking", "Suggested next steps when the seeded timeline includes weather disruptions."),
 ]
 
-PALETTE = [
-    ("#4d148c", "#ff6600", "#f4f0fb"),
-    ("#5b1aa3", "#ff8f1f", "#f7f2ff"),
-    ("#472f92", "#f8c471", "#f5f4fb"),
-    ("#3c1053", "#ff7f32", "#fff4eb"),
-]
+def deterministic_password_hash(password: str, email: str) -> str:
+    """Return a fixed-salt PBKDF2 hash for a benchmark account.
+
+    Werkzeug's default hasher draws a random salt, which would make every rebuild
+    of the seed differ in bytes. Benchmark accounts are public demo identities, so
+    a stable salt derived from the account email keeps the generated seed
+    reproducible. Accounts created through `/register` at runtime still call
+    `User.set_password`, which uses a random salt.
+    """
+    fixed_salt = hashlib.sha1(f"fedex-demo-salt-{email}".encode()).hexdigest()[:8]
+    derived = hashlib.pbkdf2_hmac("sha256", password.encode(), fixed_salt.encode(), 1000, dklen=32).hex()
+    return f"pbkdf2:sha256:1000${fixed_salt}${derived}"
 
 
 def ensure_dirs() -> None:
-    for path in [INSTANCE_DIR, INSTANCE_SEED_DIR, IMAGE_DIR, EXTERNAL_CACHE_DIR]:
+    for path in [INSTANCE_DIR, INSTANCE_SEED_DIR, EXTERNAL_CACHE_DIR]:
         path.mkdir(parents=True, exist_ok=True)
-
-
-def write_svg(path: Path, title: str, accent: str, secondary: str, background: str, lines: list[str]) -> None:
-    bars = "".join(
-        f'<rect x="34" y="{88 + i * 18}" width="{220 - i * 18}" height="8" rx="4" fill="{secondary}" opacity="{0.82 - i * 0.08:.2f}"/>'
-        for i in range(len(lines))
-    )
-    labels = "".join(
-        f'<text x="42" y="{94 + i * 18}" font-size="10" fill="#1f2937" font-family="Arial">{escape(line)}</text>'
-        for i, line in enumerate(lines)
-    )
-    path.write_text(
-        f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 200" role="img" aria-label={quoteattr(title)}>
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="{background}" />
-      <stop offset="100%" stop-color="#ffffff" />
-    </linearGradient>
-  </defs>
-  <rect width="320" height="200" rx="20" fill="url(#g)" />
-  <rect x="24" y="24" width="120" height="48" rx="12" fill="{accent}" />
-  <rect x="150" y="24" width="146" height="48" rx="12" fill="{secondary}" opacity="0.16" />
-  <path d="M58 72h136l28 26H86z" fill="{secondary}" opacity="0.9" />
-  <rect x="66" y="112" width="180" height="52" rx="14" fill="#ffffff" stroke="{secondary}" stroke-width="2" />
-  {bars}
-  {labels}
-  <text x="40" y="53" font-size="22" font-weight="700" fill="#ffffff" font-family="Arial">{escape(title)}</text>
-</svg>
-""",
-        encoding="utf-8",
-    )
-
-
-def ensure_visual_assets() -> None:
-    write_svg(
-        IMAGE_DIR / "hero-tracking.svg",
-        "FedEx demo tracker",
-        "#4d148c",
-        "#ff6600",
-        "#f8f4ff",
-        ["Track package", "Estimate rates", "Schedule pickup"],
-    )
-    for index, service in enumerate(SERVICE_LEVELS):
-        accent, secondary, background = PALETTE[index % len(PALETTE)]
-        write_svg(
-            IMAGE_DIR / f"service-{service['slug']}.svg",
-            service["name"].replace("FedEx ", ""),
-            accent,
-            secondary,
-            background,
-            [service["speed_label"], service["summary"], service["money_back_label"]],
-        )
-    for index, location in enumerate(LOCATION_DATA):
-        accent, secondary, background = PALETTE[index % len(PALETTE)]
-        write_svg(
-            IMAGE_DIR / f"location-{location[1]}.svg",
-            location[2],
-            accent,
-            secondary,
-            background,
-            [location[0], location[5], location[6]],
-        )
 
 
 def service_price(service_slug: str, weight_lb: float, lane_index: int) -> float:
@@ -388,10 +375,12 @@ def stage_copy(stage: str) -> tuple[str, str, str]:
 
 def seed_database() -> None:
     if ServiceLevel.query.count() > 0:
+        # An existing database is left exactly as it is: reseeding in place could
+        # silently produce a partial state, so a rebuild must go through
+        # rebuild_seed_database(), which starts from an empty file.
         return
 
     ensure_dirs()
-    ensure_visual_assets()
 
     services: dict[str, ServiceLevel] = {}
     for service in SERVICE_LEVELS:
@@ -405,7 +394,6 @@ def seed_database() -> None:
             zone_surcharge=service["zone_surcharge"],
             weekend_delivery=service["weekend_delivery"],
             money_back_label=service["money_back_label"],
-            icon_path=f"/static/images/service-{service['slug']}.svg",
             sort_order=service["sort_order"],
         )
         db.session.add(row)
@@ -425,27 +413,23 @@ def seed_database() -> None:
             hours=hours,
             services_json=dumps_json(services_list),
             amenities_json=dumps_json(amenities_list),
-            image_path=f"/static/images/location-{slug}.svg",
             pickup_note=pickup_note,
         )
         db.session.add(row)
         locations.append(row)
 
-    from support_content import SUPPORT_CONTENT
-
     for title, slug, category, summary in SUPPORT_ARTICLES:
-        content = SUPPORT_CONTENT.get(slug, {})
+        # Every advertised topic gets real local guidance from the tracked content
+        # module; a slug without content raises instead of storing a placeholder.
+        content = article(slug, title, category, summary)
         db.session.add(
             SupportArticle(
                 title=title,
                 slug=slug,
                 category=category,
-                summary=content.get("summary", summary),
-                body=content.get("body", (
-                    f"{summary} This page is part of a deterministic local FedEx-style demo. "
-                    "It uses synthetic shipping records, seeded route milestones, and fixed support guidance so benchmark agents can practice tracking, billing, and pickup workflows without contacting any live carrier service."
-                )),
-                related_topics_json=dumps_json(content.get("topics", [category, "demo workflow", "tracking help"])),
+                summary=content["summary"],
+                body=content["body"],
+                related_topics_json=dumps_json(content["topics"]),
             )
         )
 
@@ -467,18 +451,26 @@ def seed_database() -> None:
                 )
             )
 
+    db.session.add(SeedMetadata(key="seed_schema_version", value=SEED_SCHEMA_VERSION))
     db.session.commit()
 
 
 def seed_benchmark_users() -> None:
-    if User.query.filter_by(email="alice.j@test.com").first():
+    if User.query.count() > 0:
+        # All four benchmark accounts and their dependent rows are created
+        # together. A single missing account is treated as an incomplete seed
+        # rather than a reason to skip the rest of the state.
+        if User.query.count() != EXPECTED_COUNTS["users"]:
+            raise ValueError(
+                f"partial benchmark state: {User.query.count()} of {EXPECTED_COUNTS['users']} accounts exist")
         return
 
     locations = {location.slug: location for location in Location.query.order_by(Location.slug.asc()).all()}
     users: list[User] = []
     for entry in BENCHMARK_USERS:
         user = User(**entry)
-        user.set_password(DEMO_PASSWORD)
+        # Fixed-salt hash so a rebuilt seed is byte-identical to the shipped one.
+        user.password_hash = deterministic_password_hash(DEMO_PASSWORD, user.email)
         db.session.add(user)
         users.append(user)
     db.session.flush()
@@ -662,6 +654,65 @@ def seed_benchmark_users() -> None:
     db.session.commit()
 
 
+def validate_seed() -> None:
+    """Fail closed unless the seeded database matches the expected shape.
+
+    A partial or stale seed must never become the authoritative state used for
+    grading, so the counts and the version marker are checked after seeding and
+    any mismatch raises instead of being committed silently.
+    """
+    tables = {
+        "users": User,
+        "service_levels": ServiceLevel,
+        "locations": Location,
+        "pickup_slots": PickupSlot,
+        "pickup_requests": PickupRequest,
+        "shipments": Shipment,
+        "tracking_records": TrackingRecord,
+        "tracking_events": TrackingEvent,
+        "invoices": Invoice,
+        "claims": Claim,
+        "support_articles": SupportArticle,
+        "search_logs": SearchLog,
+    }
+
+    def count(model) -> int:
+        # SearchLog declares a column named `query`, so `Model.query` is not the
+        # Flask-SQLAlchemy query property for every model here.
+        return db.session.query(func.count()).select_from(model).scalar() or 0
+
+    wrong = {name: (expected, count(model))
+             for name, model in tables.items()
+             for expected in (EXPECTED_COUNTS[name],)
+             if count(model) != expected}
+    if wrong:
+        raise ValueError(f"seeded row counts do not match the contract: {wrong}")
+
+    marker = db.session.get(SeedMetadata, "seed_schema_version")
+    if marker is None or marker.value != SEED_SCHEMA_VERSION:
+        raise ValueError(
+            f"seed version marker is {marker.value if marker else None!r}, expected {SEED_SCHEMA_VERSION!r}")
+
+    orphaned = (TrackingRecord.query.filter(
+        TrackingRecord.shipment_id.isnot(None),
+        ~TrackingRecord.shipment_id.in_(db.session.query(Shipment.id)),
+    ).count())
+    if orphaned:
+        raise ValueError(f"{orphaned} tracking records reference a missing shipment")
+
+    articles = count(SupportArticle)
+    generic = db.session.query(func.count()).select_from(SupportArticle).filter(
+        SupportArticle.body.like("%It uses synthetic shipping records, seeded route milestones%")
+    ).scalar() or 0
+    if articles != len(SUPPORT_CONTENT) or generic != len(SUPPORT_CONTENT):
+        raise ValueError(
+            f"support content mismatch: articles={articles} "
+            f"tracked={len(SUPPORT_CONTENT)} with_disclaimer={generic}")
+
+    if db.session.execute(db.text("PRAGMA foreign_key_check")).fetchall():
+        raise ValueError("seeded database violates a declared foreign key")
+
+
 def rebuild_seed_database() -> None:
     ensure_dirs()
     db.session.remove()
@@ -671,8 +722,13 @@ def rebuild_seed_database() -> None:
             db_file.unlink()
     db.drop_all()
     db.create_all()
-    seed_database()
-    seed_benchmark_users()
+    try:
+        seed_database()
+        seed_benchmark_users()
+        validate_seed()
+    except Exception:
+        db.session.rollback()
+        raise
     db.session.remove()
     shutil.copy2(DB_PATH, INSTANCE_SEED_DB)
 

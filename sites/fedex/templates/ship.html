@@ -10,6 +10,7 @@
   <div class="split">
     <section class="card">
       <form method="post" class="stack shipment-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-grid two">
           <div class="field">
             <label for="recipient_name">Recipient name</label>
@@ -18,7 +19,7 @@
           <div class="field">
             <label for="package_type">Package type</label>
             <select id="package_type" name="package_type">
-              {% for option in ["Box", "Envelope", "Tube", "Pak", "Freight pallet"] %}
+              {% for option in package_types %}
                 <option value="{{ option }}" {% if state.get('package_type', 'Box') == option %}selected{% endif %}>{{ option }}</option>
               {% endfor %}
             </select>
@@ -55,16 +56,18 @@
         <div class="form-grid three">
           <div class="field">
             <label for="weight_lb">Weight</label>
-            <input id="weight_lb" name="weight_lb" value="{{ state.get('weight_lb', '8') }}">
+            <input id="weight_lb" name="weight_lb" value="{{ state.get('weight_lb', '8') }}" inputmode="decimal" aria-describedby="weight_hint">
+            <p class="field-hint" id="weight_hint">Pounds, between 0.1 and 1000.</p>
           </div>
           <div class="field">
             <label for="declared_value">Declared value</label>
-            <input id="declared_value" name="declared_value" value="{{ state.get('declared_value', '150') }}">
+            <input id="declared_value" name="declared_value" value="{{ state.get('declared_value', '150') }}" inputmode="decimal" aria-describedby="declared_hint">
+            <p class="field-hint" id="declared_hint">US dollars, up to 1000000.</p>
           </div>
           <div class="field">
             <label for="pickup_mode">Handoff mode</label>
             <select id="pickup_mode" name="pickup_mode">
-              {% for option in [("dropoff", "Drop off at staffed location"), ("pickup", "Schedule courier pickup"), ("dropbox", "Use after-hours drop box")] %}
+              {% for option in pickup_modes %}
                 <option value="{{ option[0] }}" {% if state.get('pickup_mode', 'dropoff') == option[0] %}selected{% endif %}>{{ option[1] }}</option>
               {% endfor %}
             </select>

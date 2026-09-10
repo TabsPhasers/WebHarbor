@@ -8,6 +8,7 @@
     </div>
   </section>
   <form method="post" class="grid three">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     {% for quote in quotes %}
       <label class="card stack" for="service-{{ quote.service.slug }}">
         <img src="{{ url_for('static', filename='external_cache/fedex-home/icon_delivery_purple_lg_2143296207.png') }}" alt="" width="48" height="48">

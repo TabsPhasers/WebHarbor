@@ -12,7 +12,7 @@
       <button type="button" id="locations-tab" role="tab" aria-selected="false" aria-controls="locations-panel" tabindex="-1">{{ icon('location') }}<span>Locations</span></button>
     </div>
     <div class="home-tool" id="track-panel" role="tabpanel" aria-labelledby="track-tab">
-      <form action="{{ url_for('track') }}" method="post" class="home-track-form"><label class="sr-only" for="home-tracking">Tracking ID</label><input id="home-tracking" name="tracking_numbers" placeholder="TRACKING ID" required><button type="submit">Track <span aria-hidden="true">→</span></button></form>
+      <form action="{{ url_for('track') }}" method="post" class="home-track-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><label class="sr-only" for="home-tracking">Tracking ID</label><input id="home-tracking" name="tracking_numbers" placeholder="TRACKING ID" required><button type="submit">Track <span aria-hidden="true">→</span></button></form>
       <a class="multi-track" href="{{ url_for('track') }}">Track multiple shipments</a>
     </div>
     <div class="home-tool" id="rates-panel" role="tabpanel" aria-labelledby="rates-tab" hidden><a class="button button-primary" href="{{ url_for('rate_estimate') }}">Get rates</a><a class="button button-primary" href="{{ url_for('ship') }}">Ship now</a></div>
