@@ -16,7 +16,7 @@ Read-only routes never write. Browsing, searching and tracking leave the seeded 
 
 The seed is a pure function of tracked source. `seed_data.py` builds `instance_seed/fedex.db` from the models in `app.py` and the guide text in `support_content.py`, in a single transaction, and then validates the result before keeping it: row counts, referential integrity under `PRAGMA foreign_keys`, the `seed_metadata` schema marker `fedex-source-v2`, and the absence of any unsupported relation. A validation failure aborts the build instead of producing a partial database.
 
-Two runs produce byte-identical files. Benchmark password hashes use a fixed per-account salt for that reproducibility; accounts registered at runtime still get a random salt. The generator pins its own database URI, so an ambient `FEDEX_DATABASE_URI` cannot redirect the build.
+Two runs produce byte-identical files within one SQLite runtime. Benchmark password hashes use a fixed per-account salt for that reproducibility; accounts registered at runtime still get a random salt. Different SQLite versions can encode equivalent rows differently, so the image build (SQLite 3.40.1) and a workstation build (3.45.1) hash differently while every row is identical and every derived grading target matches; reset comparisons use the seed rebuilt inside the same container runtime. The generator pins its own database URI, so an ambient `FEDEX_DATABASE_URI` cannot redirect the build.
 
 Because the seed is generated, the Hugging Face archive for this site is media-only. The Docker build runs the generator after validating the media inventory, so the image contains no opaque seed binary and no answer key that is not derivable from tracked source.
 
