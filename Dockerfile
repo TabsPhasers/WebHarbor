@@ -50,6 +50,12 @@ RUN python3 /opt/check_asset_inventory.py /opt/WebSyn/walmart_careers && \
 RUN cd /opt/WebSyn/walmart_careers && rm -rf instance instance_seed && \
     PYTHONHASHSEED=0 python seed_data.py && rm -rf instance
 
+# FedEx validates its downloaded homepage media against the tracked inventory and
+# rebuilds its deterministic, version-marked SQLite seed from tracked source data.
+RUN python3 /opt/check_asset_inventory.py /opt/WebSyn/fedex
+RUN cd /opt/WebSyn/fedex && rm -rf instance instance_seed && \
+    PYTHONHASHSEED=0 python seed_data.py && rm -rf instance
+
 COPY websyn_start.sh    /opt/websyn_start.sh
 COPY control_server.py  /opt/control_server.py
 COPY site_runner.py     /opt/site_runner.py
