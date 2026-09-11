@@ -645,9 +645,12 @@ def seed_benchmark_users() -> None:
 
     db.session.add_all(
         [
-            SearchLog(query="weather delay", search_type="support", created_on="2026-06-04"),
-            SearchLog(query="FDX260000001", search_type="tracking", created_on="2026-06-04"),
-            SearchLog(query="Seattle location", search_type="global", created_on="2026-06-04"),
+            # Illustrative recent searches only. These rows are never rendered, but
+            # they must not restate a task query or a graded answer, so they name
+            # topics no task asks about.
+            SearchLog(query="box sizes", search_type="support", created_on="2026-06-04"),
+            SearchLog(query="holiday hours", search_type="global", created_on="2026-06-04"),
+            SearchLog(query="customs forms", search_type="support", created_on="2026-06-04"),
         ]
     )
 

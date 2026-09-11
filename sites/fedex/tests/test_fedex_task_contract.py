@@ -625,10 +625,16 @@ class GradingContractTests(unittest.TestCase):
                 initial, after = self.snapshots(directory)
                 with sqlite3.connect(after) as connection:
                     if table == "claims":
+                        # Any existing tracking number satisfies the foreign key; it is
+                        # read from the snapshot so this file restates no graded value.
+                        parent = connection.execute(
+                            "SELECT tracking_number FROM tracking_records ORDER BY id LIMIT 1"
+                        ).fetchone()
                         connection.execute(
                             "INSERT INTO claims (claim_number,user_id,tracking_number,claim_type,"
                             "amount,status,opened_on,note) VALUES "
-                            "('CLM-9999',1,'FDX260000001','Missing package',1.0,'Closed','2026-06-04','x')")
+                            "('CLM-9999',1,?,'Missing package',1.0,'Closed','2026-06-04','x')",
+                            (parent[0],))
                     else:
                         connection.execute(
                             "INSERT INTO search_logs (query,search_type,created_on) "

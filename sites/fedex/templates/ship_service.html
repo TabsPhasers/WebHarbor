@@ -20,7 +20,7 @@
         <p class="muted">{{ quote.service.summary }}</p>
         <p><strong>{{ quote.price|money }}</strong></p>
         <div class="field">
-          <input id="service-{{ quote.service.slug }}" type="radio" name="service_slug" value="{{ quote.service.slug }}" {% if loop.first %}checked{% endif %}>
+          <input id="service-{{ quote.service.slug }}" type="radio" name="service_slug" value="{{ quote.service.slug }}">
         </div>
       </label>
     {% endfor %}

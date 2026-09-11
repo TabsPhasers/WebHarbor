@@ -127,6 +127,12 @@ MAX_PASSWORD = 200
 MAX_WEIGHT_LB = 1000.0
 MAX_DECLARED_VALUE = 1000000.0
 MAX_PACKAGE_COUNT = 20
+
+# Upper bound on one search result list. It has to be large enough that a bounded
+# catalogue is never truncated: the site seeds 18 support articles and 15
+# locations, and a task may require opening a match that sorts last. A smaller
+# bound would silently drop that match from the only route the task permits.
+MAX_SEARCH_RESULTS = 24
 PHONE_PATTERN = re.compile(r"^[0-9+().\- ]{7,40}$")
 ZIP_PATTERN = re.compile(r"^[0-9]{5}(?:-[0-9]{4})?$")
 
@@ -727,11 +733,14 @@ def tracking_detail(tracking_number: str):
 @app.route("/rate-estimate", methods=["GET", "POST"])
 def rate_estimate():
     quotes = None
+    # No field arrives pre-filled. A default here would be a value the run is asked
+    # to supply, and one rate task's lane, weight and package type were previously
+    # carried by these defaults, which reduced that task to a single submit.
     raw_state = {
-        "origin_state": request.values.get("origin_state", "CA"),
-        "destination_state": request.values.get("destination_state", "TX"),
-        "weight_lb": request.values.get("weight_lb", "8"),
-        "package_type": request.values.get("package_type", "Box"),
+        "origin_state": request.values.get("origin_state", ""),
+        "destination_state": request.values.get("destination_state", ""),
+        "weight_lb": request.values.get("weight_lb", ""),
+        "package_type": request.values.get("package_type", ""),
     }
     form_state = {key: (value if isinstance(value, str) else "") for key, value in raw_state.items()}
     if request.method == "GET" and request.args.get("quote"):
@@ -965,14 +974,13 @@ def ship_confirmation():
 @login_required
 def pickup():
     locations = Location.query.order_by(Location.city.asc()).all()
-    preferred = current_user.preferred_location_slug
-    default_slug = preferred if any(location.slug == preferred for location in locations) else (
-        locations[0].slug if locations else "")
-    selected_slug = bounded_text(request.values.get("location_slug"), MAX_TEXT) or default_slug
-    location = Location.query.filter_by(slug=selected_slug).first()
-    if location is None:
-        location = next((item for item in locations if item.slug == default_slug), None)
-        selected_slug = location.slug if location else ""
+    # Nothing is pre-selected. The account's preferred location is the run's own
+    # profile data, and defaulting to it would hand over a location a task asks the
+    # run to choose; the window list likewise stays empty until a location is
+    # picked, because the earliest window is itself a graded value.
+    requested = bounded_text(request.values.get("location_slug"), MAX_TEXT) or ""
+    location = Location.query.filter_by(slug=requested).first() if requested else None
+    selected_slug = location.slug if location else ""
     slots = []
     if location:
         slots = (
@@ -990,7 +998,11 @@ def pickup():
         flash(f"Enter a package count between 1 and {MAX_PACKAGE_COUNT}.", "danger")
         return render_template("pickup.html", locations=locations, selected_slug=selected_slug,
                                slots=slots), 400
-    if slot is None or (location is not None and slot.location_id != location.id):
+    if location is None:
+        flash("Choose one of the listed pickup locations.", "danger")
+        return render_template("pickup.html", locations=locations, selected_slug=selected_slug,
+                               slots=slots), 400
+    if slot is None or slot.location_id != location.id:
         flash("Choose one of the pickup slots listed for that location.", "danger")
         return render_template("pickup.html", locations=locations, selected_slug=selected_slug,
                                slots=slots), 400
@@ -1096,17 +1108,30 @@ def search():
     # database byte-identical so reset and read-only state grading stay exact.
     if query:
         token_like = f"%{query}%"
-        articles = support_query(query).limit(8).all()
+        articles = (support_query(query)
+                    .order_by(SupportArticle.category.asc(), SupportArticle.title.asc())
+                    .limit(MAX_SEARCH_RESULTS).all())
+        # Ordered by the same content-neutral rule the /locations directory uses,
+        # so a match's rank comes from its state and city rather than from the
+        # order the seed happened to insert rows in. The matched fields have to be
+        # the directory's fields too: a location whose type is "Ship Center" but
+        # whose name is not, such as the Dallas Arts District Hub, was previously
+        # invisible to global search while the directory returned it.
         locations = Location.query.filter(
-            or_(Location.city.ilike(token_like), Location.state.ilike(token_like), Location.name.ilike(token_like))
-        ).limit(8).all()
+            or_(
+                Location.city.ilike(token_like),
+                Location.state.ilike(token_like),
+                Location.name.ilike(token_like),
+                Location.location_type.ilike(token_like),
+            )
+        ).order_by(Location.state.asc(), Location.city.asc()).limit(MAX_SEARCH_RESULTS).all()
         tracking_matches = TrackingRecord.query.filter(
             or_(
                 TrackingRecord.tracking_number.ilike(token_like),
                 TrackingRecord.recipient_name.ilike(token_like),
                 TrackingRecord.status_summary.ilike(token_like),
             )
-        ).limit(8).all()
+        ).order_by(TrackingRecord.tracking_number.asc()).limit(MAX_SEARCH_RESULTS).all()
     return render_template(
         "search.html",
         query=query,

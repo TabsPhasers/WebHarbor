@@ -19,8 +19,9 @@
           <div class="field">
             <label for="package_type">Package type</label>
             <select id="package_type" name="package_type">
+              <option value="" {% if not state.get('package_type') %}selected{% endif %}>Select a package type</option>
               {% for option in package_types %}
-                <option value="{{ option }}" {% if state.get('package_type', 'Box') == option %}selected{% endif %}>{{ option }}</option>
+                <option value="{{ option }}" {% if state.get('package_type', '') == option %}selected{% endif %}>{{ option }}</option>
               {% endfor %}
             </select>
           </div>
@@ -28,13 +29,14 @@
         <div class="form-grid two">
           <div class="field">
             <label for="origin_city">Origin city</label>
-            <input id="origin_city" name="origin_city" value="{{ state.get('origin_city', current_user.city) }}">
+            <input id="origin_city" name="origin_city" value="{{ state.get('origin_city', '') }}">
           </div>
           <div class="field">
             <label for="origin_state">Origin state</label>
             <select id="origin_state" name="origin_state">
+              <option value="" {% if not state.get('origin_state') %}selected{% endif %}>Select a state</option>
               {% for label in state_labels %}
-                <option value="{{ label }}" {% if state.get('origin_state', current_user.state) == label %}selected{% endif %}>{{ label }}</option>
+                <option value="{{ label }}" {% if state.get('origin_state', '') == label %}selected{% endif %}>{{ label }}</option>
               {% endfor %}
             </select>
           </div>
@@ -47,8 +49,9 @@
           <div class="field">
             <label for="destination_state">Destination state</label>
             <select id="destination_state" name="destination_state">
+              <option value="" {% if not state.get('destination_state') %}selected{% endif %}>Select a state</option>
               {% for label in state_labels %}
-                <option value="{{ label }}" {% if state.get('destination_state', 'TX') == label %}selected{% endif %}>{{ label }}</option>
+                <option value="{{ label }}" {% if state.get('destination_state', '') == label %}selected{% endif %}>{{ label }}</option>
               {% endfor %}
             </select>
           </div>
@@ -56,19 +59,20 @@
         <div class="form-grid three">
           <div class="field">
             <label for="weight_lb">Weight</label>
-            <input id="weight_lb" name="weight_lb" value="{{ state.get('weight_lb', '8') }}" inputmode="decimal" aria-describedby="weight_hint">
+            <input id="weight_lb" name="weight_lb" value="{{ state.get('weight_lb', '') }}" inputmode="decimal" aria-describedby="weight_hint">
             <p class="field-hint" id="weight_hint">Pounds, between 0.1 and 1000.</p>
           </div>
           <div class="field">
             <label for="declared_value">Declared value</label>
-            <input id="declared_value" name="declared_value" value="{{ state.get('declared_value', '150') }}" inputmode="decimal" aria-describedby="declared_hint">
+            <input id="declared_value" name="declared_value" value="{{ state.get('declared_value', '') }}" inputmode="decimal" aria-describedby="declared_hint">
             <p class="field-hint" id="declared_hint">US dollars, up to 1000000.</p>
           </div>
           <div class="field">
             <label for="pickup_mode">Handoff mode</label>
             <select id="pickup_mode" name="pickup_mode">
+              <option value="" {% if not state.get('pickup_mode') %}selected{% endif %}>Select a handoff mode</option>
               {% for option in pickup_modes %}
-                <option value="{{ option[0] }}" {% if state.get('pickup_mode', 'dropoff') == option[0] %}selected{% endif %}>{{ option[1] }}</option>
+                <option value="{{ option[0] }}" {% if state.get('pickup_mode', '') == option[0] %}selected{% endif %}>{{ option[1] }}</option>
               {% endfor %}
             </select>
           </div>

@@ -15,6 +15,7 @@
           <div class="field">
             <label for="origin_state">Origin state</label>
             <select id="origin_state" name="origin_state">
+              <option value="" {% if not form_state.origin_state %}selected{% endif %}>Select a state</option>
               {% for label in state_labels %}
                 <option value="{{ label }}" {% if form_state.origin_state == label %}selected{% endif %}>{{ label }}</option>
               {% endfor %}
@@ -23,6 +24,7 @@
           <div class="field">
             <label for="destination_state">Destination state</label>
             <select id="destination_state" name="destination_state">
+              <option value="" {% if not form_state.destination_state %}selected{% endif %}>Select a state</option>
               {% for label in state_labels %}
                 <option value="{{ label }}" {% if form_state.destination_state == label %}selected{% endif %}>{{ label }}</option>
               {% endfor %}
@@ -37,6 +39,7 @@
           <div class="field">
             <label for="package_type">Package type</label>
             <select id="package_type" name="package_type">
+              <option value="" {% if not form_state.package_type %}selected{% endif %}>Select a package type</option>
               {% for option in package_types %}
                 <option value="{{ option }}" {% if form_state.package_type == option %}selected{% endif %}>{{ option }}</option>
               {% endfor %}

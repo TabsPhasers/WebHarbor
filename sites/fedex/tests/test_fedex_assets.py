@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from typing import Any
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -340,23 +341,91 @@ class AnswerLeakageTests(unittest.TestCase):
         cls.rows = [json.loads(line)
                     for line in (SITE_ROOT / "tasks.jsonl").read_text().splitlines() if line.strip()]
 
-    def graded_identifiers(self) -> set[str]:
-        """Return the identifiers a run must report, excluding task inputs.
+    # Which ground-truth fields hold the identifiers a run must report, by task
+    # kind. This is enumerated rather than derived by subtracting the identifiers
+    # quoted in a question, because a selection task quotes every candidate in the
+    # question and grades one of them: for the delivered-comparison task all three
+    # tracking numbers appear in the question, so subtracting question identifiers
+    # removed the answer along with the inputs and let a placeholder that singled
+    # out the delivered number pass unnoticed.
+    ANSWER_FIELDS = {
+        "delivered_comparison": ("delivered",),
+        "shipment_list_by_status": ("pairs",),
+        "invoice_for_delivered_lane": ("invoice_number", "shipment_code"),
+        "claim_by_status": ("claim_number", "tracking_number"),
+        "claim_by_type": ("claim_number", "tracking_number"),
+        "pickup_by_status": ("confirmation_code",),
+        "create_shipment": ("expectation",),
+        "schedule_pickup": ("expectation",),
+    }
+    IDENTIFIER_PATTERN = re.compile(r"\b(?:FDX|SH|INV|CLM|PU)-?\d{3,}\b")
 
-        Tracking numbers quoted in a question are inputs the agent is told to look
-        up, so they are not answers. Everything else the verifiers derive is.
+    def graded_identifiers(self) -> set[str]:
+        """Return the identifiers a run must report, excluding pure task inputs.
+
+        A tracking number the question tells the run to look up is an input. An
+        identifier the verifier grades is an answer, even when the question also
+        quotes it as one of several candidates.
         """
         from ground_truth import TASK_COUNT, task_ground_truth
-        derived: set[str] = set()
+
+        def collect(value: Any, into: set[str]) -> None:
+            if isinstance(value, str):
+                into.update(match.upper() for match in self.IDENTIFIER_PATTERN.findall(value))
+            elif isinstance(value, dict):
+                for item in value.values():
+                    collect(item, into)
+            elif isinstance(value, (list, tuple)):
+                for item in value:
+                    collect(item, into)
+
+        answers: set[str] = set()
         for number in range(TASK_COUNT):
-            text = json.dumps(task_ground_truth(self.seed, number), default=str)
-            derived.update(match.upper() for match in
-                           re.findall(r"\b(?:FDX|SH|INV|CLM|PU)-?\d{3,}\b", text))
-        given: set[str] = set()
+            truth = task_ground_truth(self.seed, number)
+            for field in self.ANSWER_FIELDS.get(truth["kind"], ()):
+                collect(truth.get(field), answers)
+        return answers - self.quoted_candidates()
+
+    def quoted_candidates(self) -> set[str]:
+        """Identifiers a question quotes for the run to look up.
+
+        A selection task names every candidate and grades one of them, so those
+        identifiers have to be quotable in the manifest. They are handled by
+        `test_a_selection_answer_is_never_singled_out` instead of being forbidden.
+        """
+        quoted: set[str] = set()
         for row in self.rows:
-            given.update(match.upper() for match in
-                         re.findall(r"\b(?:FDX|SH|INV|CLM|PU)-?\d{3,}\b", row["ques"]))
-        return derived - given
+            quoted.update(match.upper() for match in self.IDENTIFIER_PATTERN.findall(row["ques"]))
+        return quoted
+
+    def selection_answers(self) -> dict[str, set[str]]:
+        """Map a graded identifier that a question also quotes to its full candidate set."""
+        quoted_by_task = [
+            {match.upper() for match in self.IDENTIFIER_PATTERN.findall(row["ques"])}
+            for row in self.rows
+        ]
+        from ground_truth import TASK_COUNT, task_ground_truth
+
+        def collect(value: Any, into: set[str]) -> None:
+            if isinstance(value, str):
+                into.update(match.upper() for match in self.IDENTIFIER_PATTERN.findall(value))
+            elif isinstance(value, dict):
+                for item in value.values():
+                    collect(item, into)
+            elif isinstance(value, (list, tuple)):
+                for item in value:
+                    collect(item, into)
+
+        out: dict[str, set[str]] = {}
+        for number in range(TASK_COUNT):
+            truth = task_ground_truth(self.seed, number)
+            answers: set[str] = set()
+            for field in self.ANSWER_FIELDS.get(truth["kind"], ()):
+                collect(truth.get(field), answers)
+            quoted = quoted_by_task[number]
+            for answer in answers & quoted:
+                out[answer] = quoted
+        return out
 
     def graded_values(self) -> set[str]:
         """Return the distinctive strings a run must report, excluding inputs.
@@ -448,6 +517,42 @@ class AnswerLeakageTests(unittest.TestCase):
         for slug, summary, body in rows:
             with self.subTest(stored_article=slug):
                 self.assertEqual([], pattern.findall(f"{summary} {body}"))
+
+    def test_a_selection_answer_is_never_singled_out(self) -> None:
+        """A quoted candidate may appear only alongside its siblings.
+
+        The delivered-comparison task quotes three tracking numbers and grades
+        which one is delivered, so the manifest has to name all three. What it must
+        never do is mention the graded one on its own: a search placeholder that
+        carried only that number handed out the answer. For every graded identifier
+        a question also quotes, any file that mentions it must mention all of that
+        task's candidates too.
+        """
+        selections = self.selection_answers()
+        self.assertGreaterEqual(len(selections), 1,
+                                "expected at least one selection task in the set")
+        for identifier, candidates in sorted(selections.items()):
+            siblings = sorted(candidates - {identifier})
+            self.assertGreater(len(siblings), 0,
+                               f"{identifier} has no sibling candidates to compare against")
+            for path in sorted(SITE_ROOT.rglob("*")):
+                if not path.is_file() or path.suffix not in {
+                        ".py", ".html", ".js", ".css", ".md", ".json", ".jsonl"}:
+                    continue
+                relative = path.relative_to(SITE_ROOT).as_posix()
+                if relative.startswith("verify/") or relative.startswith("instance"):
+                    continue
+                if relative == "seed_data.py":
+                    continue
+                text = path.read_text(errors="replace").upper()
+                if identifier not in text:
+                    continue
+                absent = [sibling for sibling in siblings if sibling not in text]
+                with self.subTest(identifier=identifier, file=relative):
+                    self.assertEqual(
+                        [], absent,
+                        f"{relative} singles out the graded identifier {identifier} "
+                        f"without its candidates {absent}")
 
     def test_task_manifest_carries_no_answers(self) -> None:
         self.assertEqual(18, len(self.rows))

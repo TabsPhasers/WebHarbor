@@ -14,6 +14,7 @@
         <div class="field">
           <label for="location_slug">Pickup location</label>
           <select id="location_slug" name="location_slug" onchange="window.location.href='{{ url_for('pickup') }}?location_slug=' + encodeURIComponent(this.value)">
+            <option value="" {% if not selected_slug %}selected{% endif %}>Select a location</option>
             {% for location in locations %}
               <option value="{{ location.slug }}" {% if selected_slug == location.slug %}selected{% endif %}>{{ location.name }} · {{ location.city }}, {{ location.state }}</option>
             {% endfor %}
@@ -22,6 +23,7 @@
         <div class="field">
           <label for="pickup_slot_id">Available window</label>
           <select id="pickup_slot_id" name="pickup_slot_id">
+            <option value="" selected>{{ 'Select a window' if slots else 'Choose a location first' }}</option>
             {% for slot in slots %}
               <option value="{{ slot.id }}">{{ slot.slot_date }} · {{ slot.time_window }} · {{ slot.remaining_capacity }} left</option>
             {% endfor %}
@@ -29,7 +31,8 @@
         </div>
         <div class="field">
           <label for="package_count">Package count</label>
-          <input id="package_count" name="package_count" value="1">
+          <input id="package_count" name="package_count" value="" inputmode="numeric" aria-describedby="package_count_hint">
+          <p class="field-hint" id="package_count_hint">Between 1 and 20 packages for one scheduled window.</p>
         </div>
         <input type="submit" value="Schedule pickup">
       </form>

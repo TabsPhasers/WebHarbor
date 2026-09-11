@@ -233,7 +233,17 @@ class FedExRouteTests(unittest.TestCase):
             "/login",
             data={"email": "alice.j@test.com", "password": "TestPass123!"},
         )
-        pickup_page = self.client.get("/pickup")
+        # No location is pre-selected, so the window list is empty until one is
+        # chosen. Pick the first seeded location rather than naming one here.
+        slug = db.session.execute(
+            db.select(site.Location.slug).order_by(site.Location.slug)).scalars().first()
+        self.assertIsNotNone(slug)
+        bare_page = self.client.get("/pickup")
+        self.assertNotRegex(
+            bare_page.data, rb'name="pickup_slot_id".*?<option value="\d+"',
+            "the window list must stay empty until a location is chosen")
+
+        pickup_page = self.client.get(f"/pickup?location_slug={slug}")
         slot_match = re.search(
             rb'name="pickup_slot_id".*?<option value="(\d+)"',
             pickup_page.data,
@@ -244,7 +254,7 @@ class FedExRouteTests(unittest.TestCase):
         response = self.client.post(
             "/pickup",
             data={
-                "location_slug": "seattle-downtown-wa",
+                "location_slug": slug,
                 "pickup_slot_id": slot_match.group(1).decode(),
                 "package_count": "not-a-number",
             },
