@@ -742,6 +742,19 @@ def choose_palette(key: str) -> tuple[str, str, str, str]:
     return PALETTES[int(digest[:2], 16) % len(PALETTES)]
 
 
+def fit_font_size(text: str, max_width: float, base: int, minimum: int = 44,
+                  factor: float = 0.68, letter_spacing: float = 2.0) -> int:
+    """Shrink a single-line Arial-bold label until its estimated width fits.
+
+    SVG has no text measurement here, so use a conservative per-character factor
+    and step down in 2px increments. Keeps deterministic output.
+    """
+    size = base
+    while size > minimum and len(text) * (size * factor + letter_spacing) > max_width:
+        size -= 2
+    return size
+
+
 def write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -798,8 +811,8 @@ def cover_svg(title: str, artist: str, key: str) -> str:
   <path d="M180 1040 C460 760, 690 1240, 1100 860 L1420 580" fill="none" stroke="{p3}" stroke-width="24" stroke-opacity="0.55"/>
   <path d="M130 1180 C420 900, 720 1380, 1220 980" fill="none" stroke="{p3}" stroke-width="12" stroke-opacity="0.45"/>
   <circle cx="1190" cy="430" r="150" fill="{p3}" fill-opacity="0.12"/>
-  <rect x="200" y="1180" width="620" height="170" rx="26" fill="{p4}" fill-opacity="0.7"/>
-  <text x="240" y="1288" fill="{p3}" font-family="Arial, Helvetica, sans-serif" font-size="116" font-weight="700" letter-spacing="2">{html.escape(title.upper())}</text>
+  <rect x="200" y="1180" width="1180" height="170" rx="26" fill="{p4}" fill-opacity="0.7"/>
+  <text x="240" y="1288" fill="{p3}" font-family="Arial, Helvetica, sans-serif" font-size="{fit_font_size(title.upper(), 1100, 116, 52)}" font-weight="700" letter-spacing="2">{html.escape(title.upper())}</text>
   <text x="246" y="1374" fill="{p3}" font-family="Arial, Helvetica, sans-serif" font-size="40" letter-spacing="6">{html.escape(artist.upper())}</text>
   <text x="1220" y="1320" fill="{p3}" font-family="Arial, Helvetica, sans-serif" font-size="28" text-anchor="end">WH LOCAL MIRROR</text>
 </svg>"""
@@ -857,9 +870,9 @@ def merch_svg(item_type: str, title: str, artist: str, key: str) -> str:
   <circle cx="180" cy="180" r="130" fill="{p1}" fill-opacity="0.18"/>
   <circle cx="820" cy="1000" r="150" fill="{p2}" fill-opacity="0.15"/>
   {frame.format(fill=p3, stroke=p1)}
-  <rect x="300" y="420" width="400" height="240" rx="26" fill="{p1}" fill-opacity="0.92"/>
-  <text x="500" y="505" text-anchor="middle" fill="{p3}" font-family="Arial, Helvetica, sans-serif" font-size="54" font-weight="700">{html.escape(title.upper()[:18])}</text>
-  <text x="500" y="575" text-anchor="middle" fill="{p3}" font-family="Arial, Helvetica, sans-serif" font-size="28" letter-spacing="4">{html.escape(artist.upper()[:22])}</text>
+  <rect x="140" y="430" width="720" height="250" rx="26" fill="{p1}" fill-opacity="0.92"/>
+  <text x="500" y="520" text-anchor="middle" fill="{p3}" font-family="Arial, Helvetica, sans-serif" font-size="{fit_font_size(title.upper()[:26], 660, 54, 26)}" font-weight="700">{html.escape(title.upper()[:26])}</text>
+  <text x="500" y="592" text-anchor="middle" fill="{p3}" font-family="Arial, Helvetica, sans-serif" font-size="30" letter-spacing="4">{html.escape(artist.upper()[:24])}</text>
   <text x="500" y="1110" text-anchor="middle" fill="{p3}" font-family="Arial, Helvetica, sans-serif" font-size="28">WEBHARBOR LOCAL MERCH</text>
 </svg>"""
 
