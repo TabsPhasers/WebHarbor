@@ -107,6 +107,7 @@ PICKUP_MODES = (
     ("dropbox", "Use after-hours drop box"),
 )
 PICKUP_MODE_VALUES = tuple(value for value, _label in PICKUP_MODES)
+PICKUP_MODE_LABELS = dict(PICKUP_MODES)
 DEMO_SHIPMENT_LABEL = "Local demo shipment"
 
 
@@ -668,6 +669,7 @@ def inject_globals() -> dict[str, Any]:
         "state_labels": STATE_LABELS,
         "package_types": PACKAGE_TYPES,
         "pickup_modes": PICKUP_MODES,
+        "pickup_mode_labels": PICKUP_MODE_LABELS,
         "all_locations": locations,
         "nav_locations": locations[:5],
         "nav_services": services,

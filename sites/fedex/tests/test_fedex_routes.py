@@ -64,6 +64,10 @@ class FedExRouteTests(unittest.TestCase):
         for leaked_value in (b"TestPass123!", b"alice.j@test.com", b"FDX260000004", b"demo workflow"):
             self.assertNotIn(leaked_value, response.data)
         self.assertIn(b'aria-label="Sign Up or Log In"', response.data)
+        self.assertRegex(
+            response.data,
+            rb'<link rel="icon"[^>]+href="/static/external_cache/fedex-home/logo\.png"',
+        )
 
     def test_register_rejects_invalid_email_or_missing_required_values(self) -> None:
         baseline = User.query.count()
@@ -227,6 +231,33 @@ class FedExRouteTests(unittest.TestCase):
                 # A rejected draft must not poison the later steps of the flow.
                 self.assertEqual(302, self.client.get("/ship/service", follow_redirects=False).status_code)
                 self.assertNotEqual(500, self.client.get("/ship/service").status_code)
+
+    def test_shipment_review_uses_the_readable_handoff_label(self) -> None:
+        self.client.post(
+            "/login",
+            data={"email": "alice.j@test.com", "password": "TestPass123!"},
+        )
+        self.client.post(
+            "/ship",
+            data={
+                "recipient_name": "Regression Recipient",
+                "origin_city": "Seattle",
+                "origin_state": "WA",
+                "destination_city": "Austin",
+                "destination_state": "TX",
+                "package_type": "Box",
+                "weight_lb": "5",
+                "declared_value": "100",
+                "pickup_mode": "dropoff",
+            },
+        )
+        self.client.post("/ship/service", data={"service_slug": "fedex-2day"})
+
+        response = self.client.get("/ship/review")
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn(b"Drop off at staffed location", response.data)
+        self.assertNotIn(b">Dropoff<", response.data)
 
     def test_pickup_rejects_non_numeric_package_count_without_server_error(self) -> None:
         self.client.post(

@@ -16,7 +16,7 @@
             <tr><th>Route</th><td>{{ state.get('origin_city') }}, {{ state.get('origin_state') }} → {{ state.get('destination_city') }}, {{ state.get('destination_state') }}</td></tr>
             <tr><th>Package</th><td>{{ state.get('package_type') }} · {{ state.get('weight_lb') }} lb</td></tr>
             <tr><th>Declared value</th><td>{{ state.get('declared_value')|float|money }}</td></tr>
-            <tr><th>Handoff mode</th><td>{{ state.get('pickup_mode', 'dropoff')|replace('-', ' ')|title }}</td></tr>
+            <tr><th>Handoff mode</th><td>{{ pickup_mode_labels.get(state.get('pickup_mode', 'dropoff'), 'Unknown') }}</td></tr>
           </tbody>
         </table>
       </div>
