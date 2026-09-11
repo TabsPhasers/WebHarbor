@@ -13,7 +13,7 @@
             <p class="release-byline">by <a href="{{ url_for('artist_page', slug=merch.artist.slug) }}">{{ merch.artist.name }}</a>{% if merch.album %} / linked to <a href="{{ url_for('album_page', slug=merch.album.slug) }}">{{ merch.album.title }}</a>{% endif %}</p>
             <p>{{ merch.description }}</p>
             <div class="album-stats">
-                <span>{{ merch.inventory }} seeded units</span>
+                <span>{{ merch.inventory }} units available</span>
                 <span>{{ merch.release_date|longdate }}</span>
                 <span>{{ merch.price|money }}</span>
             </div>

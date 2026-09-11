@@ -649,7 +649,7 @@ def discover():
 
     genres = Genre.query.order_by(Genre.name.asc()).all()
     scenes = Scene.query.order_by(Scene.name.asc()).all()
-    tags = Tag.query.order_by(Tag.name.asc()).limit(24).all()
+    tags = Tag.query.order_by(Tag.name.asc()).all()
     albums = Album.query.order_by(Album.release_date.desc()).all()
     merch = MerchItem.query.order_by(MerchItem.release_date.desc()).all()
 
@@ -1100,7 +1100,7 @@ def checkout():
             current_user.city = shipping_city
             current_user.country = shipping_country
             db.session.commit()
-            flash("Mock checkout complete. No payment was processed.", "success")
+            flash("Checkout complete. No payment was processed.", "success")
             return redirect(url_for("order_detail", order_number=order.order_number))
     return render_template("checkout.html", items=items, summary=summary)
 

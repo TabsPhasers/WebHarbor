@@ -4,13 +4,13 @@
 <section class="container auth-shell">
     <form class="auth-card" method="post">
         <h1>Log in</h1>
-        <p>Use a seeded benchmark account or the account you just created.</p>
+        <p>Use your fan account to continue.</p>
         {% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
         <label>Email
-            <input type="email" name="email" required placeholder="alice.j@test.com">
+            <input type="email" name="email" required autocomplete="email">
         </label>
         <label>Password
-            <input type="password" name="password" required placeholder="TestPass123!">
+            <input type="password" name="password" required autocomplete="current-password">
         </label>
         <button class="button-primary" type="submit">Log in</button>
         <p class="auth-note">Need an account? <a href="{{ url_for('register') }}">Create one</a>.</p>

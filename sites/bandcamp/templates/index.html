@@ -6,15 +6,15 @@
     <div class="container hero-grid">
         <div class="hero-copy">
             <p class="eyebrow">Music discovery + commerce + fan collection</p>
-            <h1>Discover albums, buy merch, and build a fan library without leaving the local mirror.</h1>
-            <p>The layout borrows Bandcamp's clean blue header, narrow content columns, and merch-aware discovery flow while staying fully local and deterministic.</p>
+            <h1>Discover albums, buy merch, and build a fan library.</h1>
+            <p>Explore independent releases, artist merchandise, and scenes from around the world.</p>
             <div class="hero-actions">
                 <a class="button-primary" href="{{ url_for('discover') }}">Browse discover</a>
                 <a class="button-secondary" href="{{ url_for('compare_releases') }}">Compare releases</a>
             </div>
             <div class="support-box">
                 <strong>{{ support_total|money }}</strong>
-                <span>supported through seeded fan orders in this local mirror</span>
+                <span>supported through recent fan orders</span>
             </div>
         </div>
         <div class="hero-stack">

@@ -3,8 +3,8 @@
 {% block content %}
 <section class="container section-block cart-layout">
     <form class="auth-card wide" method="post">
-        <h1>Mock checkout</h1>
-        <p>No payment is processed. Completing checkout creates a deterministic local order and adds albums to your collection.</p>
+        <h1>Checkout</h1>
+        <p>No payment is processed. Completing checkout creates an order and adds albums to your collection.</p>
         <div class="form-grid">
             <label>Shipping name
                 <input type="text" name="shipping_name" value="{{ current_user.display_name }}" required>
@@ -22,10 +22,10 @@
                 <input type="text" name="payment_label" placeholder="Visa ending in 4242" required>
             </label>
             <label class="span-2">Order note
-                <textarea name="note" rows="4" placeholder="Gift note, delivery instructions, or benchmark preference"></textarea>
+                <textarea name="note" rows="4" placeholder="Gift note or delivery instructions"></textarea>
             </label>
         </div>
-        <button class="button-primary" type="submit">Complete mock checkout</button>
+        <button class="button-primary" type="submit">Complete checkout</button>
     </form>
     <aside class="purchase-panel">
         <h2>Order summary</h2>

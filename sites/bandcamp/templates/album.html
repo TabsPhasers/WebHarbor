@@ -30,7 +30,7 @@
                     <div class="track-row">
                         <div>
                             <strong><a href="{{ url_for('track_page', slug=track.slug) }}">{{ track.track_number }}. {{ track.title }}</a></strong>
-                            <button class="preview-toggle" type="button" data-preview-target="preview-{{ track.id }}">Preview mock</button>
+                            <button class="preview-toggle" type="button" data-preview-target="preview-{{ track.id }}">Preview</button>
                             <div id="preview-{{ track.id }}" class="preview-panel">
                                 <div class="wave">
                                     <span></span><span></span><span></span><span></span><span></span>
@@ -92,7 +92,7 @@
                 </article>
             {% endfor %}
         {% else %}
-            <div class="empty-panel"><p>No comments yet. Seeded benchmark users can add one.</p></div>
+            <div class="empty-panel"><p>No comments yet. Be the first to add one.</p></div>
         {% endif %}
     </div>
     <form class="editorial-panel pale" method="post" action="{{ url_for('album_comment', slug=album.slug) }}">
