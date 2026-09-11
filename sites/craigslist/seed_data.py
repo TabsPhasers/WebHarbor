@@ -860,10 +860,14 @@ def seed_benchmark_users(db, User, Listing, SavedListing, SavedSearch, Message):
     db.session.flush()
 
     alice = created[0]
-    desk = Listing.query.filter(Listing.title.ilike("%task chair%")).first()
-    accord = Listing.query.filter(Listing.title.ilike("%Accord%")).first()
+    # Pre-saved chair is the Black office chair (NOT the Ergonomic task chair): task 0 saves the
+    # task chair, so it must be absent from the initial saved list for the save to be verifiable.
+    saved_chair = Listing.query.filter(Listing.title.ilike("%office chair%")).first()
+    # The 2006 Accord EX stays pre-saved: task 13 removes exactly this listing, while task 3
+    # saves the 2011 Accord EX-L, which must therefore not be pre-seeded.
+    accord = Listing.query.filter(Listing.title.ilike("%2006 Honda Accord%")).first()
     studio = Listing.query.filter(Listing.title.ilike("%Berkeley BART%")).first()
-    for listing in [desk, accord, studio]:
+    for listing in [saved_chair, accord, studio]:
         if listing:
             db.session.add(SavedListing(
                 user_id=alice.id,

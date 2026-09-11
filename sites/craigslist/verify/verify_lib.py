@@ -120,10 +120,10 @@ def saved_listing_ids(db_path, email):
         "SELECT s.listing_id FROM saved_listings s JOIN users u ON u.id=s.user_id WHERE u.email=?", (email,))]
 
 def saved_searches_for(db_path, email):
-    """Return list of (name, query_text, max_price) for a user, or None."""
+    """Return list of (name, query_text, max_price, category_slug) for a user, or None."""
     if not db_path: return None
     return [tuple(r) for r in db_query(db_path,
-        "SELECT s.name, s.query_text, s.max_price FROM saved_searches s JOIN users u ON u.id=s.user_id WHERE u.email=?", (email,))]
+        "SELECT s.name, s.query_text, s.max_price, s.category_slug FROM saved_searches s JOIN users u ON u.id=s.user_id WHERE u.email=?", (email,))]
 
 def hidden_listing_ids(db_path, email):
     if not db_path: return None
