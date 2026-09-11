@@ -28,7 +28,8 @@ def main():
     j.check("nav_register", navigated_to(t, "/register"), f"register={navigated_to(t, '/register')}")
     j.check("db_available", after is not None, f"after_db={'ok' if after else None}")
     pre = db_query(initial, "SELECT email FROM users WHERE email=?", (EMAIL,)) if initial else None
-    row = db_query(after, "SELECT email, username, display_name FROM users WHERE email=?", (EMAIL,)) if after else None
+    rows = db_query(after, "SELECT email, username, display_name FROM users WHERE email=?", (EMAIL,)) if after else None
+    row = rows[0] if rows else None
     j.check("db_user_is_new", row is not None and not pre,
             f"existed_before={bool(pre)} row={row!r}")
     if row:
