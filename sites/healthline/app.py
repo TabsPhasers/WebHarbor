@@ -242,7 +242,18 @@ class ReadingHistory(db.Model):
 
 @login_manager.user_loader
 def load_user(uid):
-    return db.session.get(User, int(uid))
+    """Resolve the session user id defensively.
+
+    The session cookie is signed but still untrusted input: a malformed value
+    must yield "anonymous" instead of raising (which previously produced a 500).
+    """
+    try:
+        user_id = int(str(uid).strip())
+    except (TypeError, ValueError):
+        return None
+    if user_id <= 0:
+        return None
+    return db.session.get(User, user_id)
 
 
 # =======================================================================
