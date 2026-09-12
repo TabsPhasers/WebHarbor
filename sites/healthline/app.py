@@ -491,18 +491,14 @@ def section_page(slug):
 
 @app.route("/article/<slug>")
 def article_detail(slug):
-    art = Article.query.filter_by(slug=slug).first_or_404()
-    art.view_count += 1
-    if current_user.is_authenticated:
-        existing = ReadingHistory.query.filter_by(
-            user_id=current_user.id, article_id=art.id).first()
-        if existing:
-            existing.viewed_at = REF_DATE
-        else:
-            db.session.add(ReadingHistory(user_id=current_user.id, article_id=art.id,
-                                          viewed_at=REF_DATE))
-    db.session.commit()
+    """Read-only article page.
 
+    GET must not mutate the database: view counters and reading history are only
+    written by the explicit POST /article/<slug>/view action below, so a read
+    leaves the SQLite file byte-identical (required by the reset invariant and by
+    read-only task grading).
+    """
+    art = Article.query.filter_by(slug=slug).first_or_404()
     related = (Article.query.filter(Article.section_slug == art.section_slug,
                                     Article.id != art.id)
                .order_by(Article.view_count.desc()).limit(4).all())
@@ -512,6 +508,27 @@ def article_detail(slug):
             user_id=current_user.id, article_id=art.id).first() is not None
     return render_template("article_detail.html", article=art, related=related,
                            is_saved=is_saved)
+
+
+@app.route("/article/<slug>/view", methods=["POST"])
+def record_article_view(slug):
+    """Explicit "I read this" action.
+
+    A view is recorded only when a caller asks for it, so plain page reads stay
+    side-effect free. Requires a CSRF token like every other POST route.
+    """
+    art = Article.query.filter_by(slug=slug).first_or_404()
+    art.view_count = (art.view_count or 0) + 1
+    if current_user.is_authenticated:
+        existing = ReadingHistory.query.filter_by(
+            user_id=current_user.id, article_id=art.id).first()
+        if existing:
+            existing.viewed_at = REF_DATE
+        else:
+            db.session.add(ReadingHistory(user_id=current_user.id, article_id=art.id,
+                                          viewed_at=REF_DATE))
+    db.session.commit()
+    return {"ok": True, "slug": art.slug, "view_count": art.view_count}
 
 
 @app.route("/conditions")
