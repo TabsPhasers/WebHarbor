@@ -830,6 +830,37 @@ def health():
 
 
 # =======================================================================
+# ERROR HANDLERS
+# =======================================================================
+
+@app.errorhandler(400)
+def handle_bad_request(err):
+    """Branded page for invalid input (bad filter values, CSRF failures)."""
+    return render_template("400.html", message=getattr(err, "description", "") or
+                           "The request could not be processed."), 400
+
+
+@app.errorhandler(404)
+def handle_not_found(err):
+    return render_template("404.html"), 404
+
+
+@app.errorhandler(413)
+def handle_too_large(err):
+    return render_template("413.html"), 413
+
+
+@app.errorhandler(500)
+def handle_server_error(err):
+    # Leave the session in a usable state: a failed transaction must not linger.
+    try:
+        db.session.rollback()
+    except Exception:
+        pass
+    return render_template("500.html"), 500
+
+
+# =======================================================================
 # BOOTSTRAP
 # =======================================================================
 
