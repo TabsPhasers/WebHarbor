@@ -382,12 +382,10 @@ def seed_benchmark_users():
 @app.context_processor
 def inject_globals():
     sections = Section.query.order_by(Section.sort_order).all()
-    saved_count = 0
-    if current_user.is_authenticated:
-        saved_count = SavedArticle.query.filter_by(user_id=current_user.id).count()
+    # NOTE: no saved-article count is injected into the global context: the count is
+    # the answer to task Healthline--6 and must stay on the saved-list page only.
     return dict(
         nav_sections=sections,
-        saved_count=saved_count,
         current_year=REF_DATE.year,
         ref_date_str=REF_DATE.strftime("%B %d, %Y"),
     )
