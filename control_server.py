@@ -26,7 +26,7 @@ SITES = [
     'allrecipes', 'amazon', 'apple', 'arxiv', 'bbc_news', 'booking',
     'github', 'google_flights', 'google_map', 'google_search',
     'huggingface', 'wolfram_alpha', 'cambridge_dictionary',
-    'coursera', 'espn', 'nvidia',
+    'coursera', 'espn', 'merriam_webster', 'ikea', 'phys_org', 'target', 'ted', 'osu', 'rotten_tomatoes', 'compass', 'nvidia',
 ]
 BASE_PORT = 40000
 WEBSYN_DIR = '/opt/WebSyn'
@@ -47,6 +47,7 @@ _site_locks = {s: threading.Lock() for s in SITES}
 # their first respawn — kill_site falls back to os.killpg + zombie poll
 # for those.
 _site_procs: dict = {}
+_site_procs_lock = threading.Lock()
 
 # We tried graceful SIGTERM. Werkzeug's threaded serve_forever() doesn't
 # honor it. Since /reset wipes instance/ next anyway, in-flight transactions
@@ -105,7 +106,8 @@ def kill_site(site: str, reap_grace: float = REAP_GRACE_SECS):
     # aren't tracked here; we still adopted them as children via container
     # init, but Python won't reap them — they stay zombies until container
     # exit. That's harmless: is_alive() correctly reports them as dead.)
-    proc = _site_procs.pop(site, None)
+    with _site_procs_lock:
+        proc = _site_procs.pop(site, None)
     if proc is not None:
         try:
             proc.wait(timeout=reap_grace)
@@ -119,6 +121,7 @@ def kill_site(site: str, reap_grace: float = REAP_GRACE_SECS):
         if not is_alive(pid):
             return
         time.sleep(0.01)
+    raise RuntimeError(f'failed to stop {site} process group {pid}')
 
 
 def reset_db(site: str):
@@ -137,12 +140,16 @@ def start_site(site: str) -> int:
     # the rationale. start_new_session=True is redundant with the supervisor's
     # own setsid() but harmless and gives us a session leader from the very
     # first instant.
-    proc = subprocess.Popen(
-        ['python3', '/opt/site_runner.py', site, str(port)],
-        stdout=log, stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
-    _site_procs[site] = proc
+    try:
+        proc = subprocess.Popen(
+            ['python3', '/opt/site_runner.py', site, str(port)],
+            stdout=log, stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    finally:
+        log.close()
+    with _site_procs_lock:
+        _site_procs[site] = proc
     pid_path(site).write_text(str(proc.pid))
     return proc.pid
 
@@ -180,14 +187,23 @@ def restart_one(site: str) -> dict:
 
 @app.route('/health')
 def health():
-    sites = {}
-    all_ok = True
-    for s in SITES:
-        pid = read_pid(s)
+    def status(site):
+        pid = read_pid(site)
         alive = is_alive(pid)
-        sites[s] = {'pid': pid, 'alive': alive, 'port': site_port(s)}
-        if not alive:
-            all_ok = False
+        ready = False
+        if alive:
+            try:
+                with urllib.request.urlopen(
+                        f'http://127.0.0.1:{site_port(site)}/', timeout=1) as response:
+                    ready = response.status < 500
+            except Exception:
+                ready = False
+        return site, {'pid': pid, 'alive': alive, 'ready': ready,
+                      'port': site_port(site)}
+
+    with ThreadPoolExecutor(max_workers=len(SITES)) as executor:
+        sites = dict(executor.map(status, SITES))
+    all_ok = all(item['alive'] and item['ready'] for item in sites.values())
     return jsonify({'ok': all_ok, 'sites': sites}), (200 if all_ok else 503)
 
 

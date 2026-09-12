@@ -63,6 +63,32 @@ git clone https://github.com/aiming-lab/WebHarbor && cd WebHarbor
 ./scripts/build.sh                                 # docker build -t webharbor:dev .
 ```
 
+### Local NVIDIA review candidate
+
+This local review branch registers **24 sites**: the 23 entries listed above,
+followed by NVIDIA. The published-image quickstart above is not a claim that
+this review candidate has been published or accepted.
+
+| Site | Registry position | Container port | Local review host port |
+| --- | --- | --- | --- |
+| NVIDIA | 24 | 40023 | 48023 |
+
+After preparing the candidate assets and building `webharbor:dev`, the local
+review deployment uses:
+
+```bash
+docker run -p 127.0.0.1:48080:8101 -p 127.0.0.1:48000-48023:40000-40023 webharbor:dev
+```
+
+NVIDIA inherits the site contribution from @KaKituken
+([#55](https://github.com/aiming-lab/WebHarbor/pull/55)) and the verifier/rubric
+contribution from @DEM1TASSE
+([#58](https://github.com/aiming-lab/WebHarbor/pull/58)). Its local assets are
+tracked separately while review continues: the unchanged `.assets-revision`
+pin does not contain `nvidia.tar.gz`, so `fetch_assets.sh` alone cannot yet
+prepare this 24-site candidate. This is file-level integration, not a claim
+that either PR was merged or that the NVIDIA review has passed.
+
 ## 🤝 Contribute
 
 We have built 23 high-quality mirrors covering the [WebVoyager](https://github.com/MinorJerry/WebVoyager) benchmark. The next goal is **100+ sites**, covering everything in [Online-Mind2Web](https://huggingface.co/datasets/osunlp/Online-Mind2Web). We are inviting the community to build this together.
