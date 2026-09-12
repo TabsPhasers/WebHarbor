@@ -26,6 +26,6 @@ document.querySelectorAll(".preview-toggle").forEach((button) => {
     const panel = document.getElementById(targetId);
     if (!panel) return;
     panel.classList.toggle("open");
-    button.textContent = panel.classList.contains("open") ? "Hide preview" : "Preview mock";
+    button.textContent = panel.classList.contains("open") ? "Hide preview" : "Preview";
   });
 });
