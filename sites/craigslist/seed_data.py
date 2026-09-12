@@ -119,39 +119,90 @@ def image_pool(base_dir):
     return pools
 
 
-def pick_image(pools, category_slug, idx):
+_GENERATED_SPECS = []
+_USED_REAL = set()
+
+
+def _real_pool(pools, category_slug):
     if category_slug in pools and pools[category_slug]:
-        values = pools[category_slug]
-        return values[idx % len(values)]
+        return [v for v in pools[category_slug] if "_gen_" not in v]
     if category_slug in {"software", "customer_service", "food_bev_hosp",
                          "general_labor", "healthcare", "education",
                          "sales", "skilled_trade"} and pools["jobs"]:
-        return pools["jobs"][idx % len(pools["jobs"])]
+        return [v for v in pools["jobs"] if "_gen_" not in v]
     if category_slug in {"rooms_shares", "sublets"} and pools["apartments"]:
-        return pools["apartments"][idx % len(pools["apartments"])]
-    return ""
+        return [v for v in pools["apartments"] if "_gen_" not in v]
+    return []
+
+
+def _match_title_photo(title, pool):
+    title_tokens = {t for t in slugify(title).split("-") if len(t) > 1}
+    best, best_score = None, 1
+    for rel in pool:
+        if rel in _USED_REAL:
+            continue
+        stem = re.sub(r"^[a-z_]+_[0-9]+_", "", rel.rsplit("/", 1)[-1]).rsplit(".", 1)[0]
+        score = len(title_tokens & set(stem.split("-")))
+        if score > best_score:
+            best, best_score = rel, score
+    return best
+
+
+def write_generated_images(base_dir):
+    if not _GENERATED_SPECS:
+        return
+    out_dir = os.path.join(base_dir, "static", "images", "gen")
+    os.makedirs(out_dir, exist_ok=True)
+    for rel, category_slug, title in _GENERATED_SPECS:
+        path = os.path.join(out_dir, os.path.basename(rel))
+        if os.path.exists(path):
+            continue
+        digest = hashlib.md5(f"{category_slug}:{title}".encode("utf-8")).hexdigest()
+        hue = int(digest[:4], 16) % 360
+        label = category_slug.replace("_", " ").upper()
+        short = (title or label)[:44].replace("&", "&amp;").replace("<", "&lt;")
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480" '
+            'viewBox="0 0 640 480" role="img" aria-label="craigslist listing illustration">\n'
+            f'  <rect width="640" height="480" fill="hsl({hue},45%,88%)"/>\n'
+            f'  <rect x="0" y="356" width="640" height="124" fill="hsl({(hue + 40) % 360},38%,72%)"/>\n'
+            f'  <circle cx="544" cy="92" r="48" fill="hsl({hue},60%,78%)"/>\n'
+            f'  <text x="36" y="66" font-family="Helvetica, Arial, sans-serif" font-size="26" '
+            f'font-weight="bold" fill="hsl({hue},45%,30%)">{label}</text>\n'
+            f'  <text x="36" y="414" font-family="Helvetica, Arial, sans-serif" font-size="21" '
+            f'fill="hsl({hue},45%,25%)">{short}</text>\n'
+            '</svg>\n'
+        )
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(svg)
+
+
+def pick_image(pools, category_slug, idx, title=""):
+    """Assign a primary image deterministically.
+
+    Real scraped photos are used only when the listing title matches the photo's
+    own filename (e.g. '2006 Honda Accord EX' -> ...-2006-honda-accord-ex.jpg);
+    a shared pool photo of a different real item must not represent this listing
+    (image/content mismatch found in review). Everything else gets a generated,
+    deterministic SVG placeholder written by write_generated_images().
+    """
+    real = _real_pool(pools, category_slug)
+    matched = _match_title_photo(title, real) if (title and real) else None
+    if matched:
+        _USED_REAL.add(matched)
+        return matched
+    rel = f"images/gen/{category_slug}-{idx}.svg"
+    _GENERATED_SPECS.append((rel, category_slug, title))
+    return rel
 
 
 def image_gallery(pools, category_slug, idx, primary):
+    # Galleries intentionally show only the listing's own image: the shared pool
+    # holds photos of other real items, and mixing them into this listing's
+    # carousel misrepresents the posting (review finding).
     if not primary:
         return []
-    key = category_slug
-    if key not in pools or not pools[key]:
-        if category_slug in {"software", "customer_service", "food_bev_hosp",
-                             "general_labor", "healthcare", "education",
-                             "sales", "skilled_trade"}:
-            key = "jobs"
-        elif category_slug in {"rooms_shares", "sublets"}:
-            key = "apartments"
-    values = list(pools.get(key, []))
-    if not values:
-        return [primary]
-    ordered = [primary]
-    for offset in range(1, min(5, len(values))):
-        candidate = values[(idx + offset) % len(values)]
-        if candidate not in ordered:
-            ordered.append(candidate)
-    return ordered
+    return [primary]
 
 
 AREA_MAP_BASES = {
@@ -704,13 +755,13 @@ def build_listing_records(base_dir):
 
     for i, item in enumerate(SPECIAL_LISTINGS):
         row = dict(item)
-        row["image"] = pick_image(pools, row["category_slug"], i)
+        row["image"] = pick_image(pools, row["category_slug"], i, row["title"])
         records.append(finalize_record(row, pools, i))
 
     offset = len(records)
     for i, item in enumerate(TARGET_NEAR_MISSES, start=1):
         row = dict(item)
-        row["image"] = pick_image(pools, row["category_slug"], offset + i)
+        row["image"] = pick_image(pools, row["category_slug"], offset + i, row["title"])
         records.append(finalize_record(row, pools, offset + i))
 
     category_sequence = [
@@ -772,7 +823,7 @@ def build_listing_records(base_dir):
                     "availability": "available now",
                     "cross_streets": neighborhood_cycle[(idx + 2) % len(neighborhood_cycle)],
                 },
-                "image": pick_image(pools, category_slug, idx),
+                "image": pick_image(pools, category_slug, idx, title),
             }
             records.append(finalize_record(row, pools, idx))
     return records
@@ -802,6 +853,7 @@ def seed_database(base_dir, db, Category, Listing):
     seed_categories(db, Category)
     category_map = {c.slug: c for c in Category.query.all()}
     records = build_listing_records(base_dir)
+    write_generated_images(base_dir)
     for idx, row in enumerate(records, start=1):
         category = category_map[row["category_slug"]]
         title = row["title"]
