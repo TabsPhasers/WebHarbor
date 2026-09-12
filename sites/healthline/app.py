@@ -43,6 +43,9 @@ app.config["SECRET_KEY"] = os.environ.get("HEALTHLINE_SECRET_KEY") or secrets.to
 app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DB_DIR / 'healthline.db'}"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["WTF_CSRF_TIME_LIMIT"] = None
+# Explicit request-body cap (matches the other merged mirror sites) so oversized
+# form posts are rejected deterministically rather than relying on framework defaults.
+app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
 
 db = SQLAlchemy(app)
 bcrypt = Bcrypt(app)
