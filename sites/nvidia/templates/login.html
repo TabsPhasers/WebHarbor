@@ -8,6 +8,7 @@
       <h2 style="text-align:center">Sign In</h2>
       <form method="post" action="{{ url_for('login') }}">
         {{ form.hidden_tag() }}
+        <input type="hidden" name="next" value="{{ request.args.get('next', '') }}">
         <div class="field">
           {{ form.email.label }}
           {{ form.email(type="email", placeholder="you@example.com") }}

@@ -14,10 +14,12 @@
     <div class="pills">
       <a class="pill" href="{{ url_for('account_edit') }}">Edit Profile</a>
       <a class="pill" href="{{ url_for('account_password') }}">Change Password</a>
-      <a class="pill" href="{{ url_for('wishlist') }}">Wishlist</a>
+      <a class="pill" href="{{ url_for('wishlist') }}">Local Wishlist</a>
+      <a class="pill" href="{{ url_for('buying_options') }}">Buying Options</a>
     </div>
 
-    <h2 style="margin-top:24px">Order History</h2>
+    <h2 style="margin-top:24px">Historical Demo Records</h2>
+    <p class="source-note">Local sample orders retained for compatibility. These are not NVIDIA transactions; no orders or payments can be created here.</p>
     {% if orders %}
       {% for o in orders %}
       <div class="card" style="padding:18px;margin-bottom:16px">
@@ -37,7 +39,7 @@
       </div>
       {% endfor %}
     {% else %}
-      <p class="muted">You have no orders yet. <a class="green" href="{{ url_for('products') }}">Start shopping</a>.</p>
+      <p class="muted">No historical demo records. <a class="green" href="{{ url_for('products') }}">Browse products</a>.</p>
     {% endif %}
   </div>
 </section>

@@ -11,6 +11,10 @@
 
 <section class="section">
   <div class="container">
+    {% include "_price_note.html" %}
+    {% if not cat or cat == 'geforce-gaming' %}
+    <div class="pills"><a class="pill" href="{{ url_for('geforce_series', series_slug='50-series') }}">RTX 50 Series Technologies</a><a class="pill" href="{{ url_for('geforce_series', series_slug='40-series') }}">RTX 40 Series Technologies</a></div>
+    {% endif %}
     <div class="pills">
       <a class="pill {% if not cat %}active{% endif %}" href="{{ url_for('products') }}">All</a>
       {% for name, slug in CATEGORIES %}

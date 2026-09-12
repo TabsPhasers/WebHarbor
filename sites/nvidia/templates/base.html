@@ -8,20 +8,28 @@
   <link rel="icon" href="{{ url_for('static', filename='icons/favicon.svg') }}">
 </head>
 <body>
+<a class="skip-link" href="#main-content">Skip to content</a>
 <header class="topbar">
   <div class="container">
     <a class="logo" href="{{ url_for('index') }}"><span class="eye">&#11041;</span><b>NVIDIA</b></a>
-    <nav class="nav">
-      <a href="{{ url_for('products', category='geforce-gaming') }}">Gaming</a>
+    <details class="site-menu">
+      <summary>Menu</summary>
+    <nav class="nav" aria-label="Products and resources">
+      <a href="{{ url_for('geforce_series', series_slug='50-series') }}">GeForce RTX 50 Series</a>
+      <a href="{{ url_for('geforce_series', series_slug='40-series') }}">GeForce RTX 40 Series</a>
+      <a href="{{ url_for('products', category='geforce-gaming') }}">Gaming Catalog</a>
       <a href="{{ url_for('products', category='studio-professional') }}">Studio</a>
       <a href="{{ url_for('products', category='data-center') }}">Data Center</a>
       <a href="{{ url_for('products', category='embedded') }}">Robotics</a>
       <a href="{{ url_for('drivers') }}">Drivers</a>
       <a href="{{ url_for('news') }}">News</a>
+      <a href="{{ url_for('buying_options') }}">Buying Options</a>
     </nav>
+    </details>
     <div class="actions">
       <form class="searchbox" action="{{ url_for('search') }}" method="get">
         <input type="search" name="q" placeholder="Search" value="{{ request.args.get('q','') }}" aria-label="Search">
+        <button type="submit">Search</button>
       </form>
       {% if current_user.is_authenticated %}
         <a href="{{ url_for('account') }}">{{ current_user.name.split()[0] }}</a>
@@ -29,7 +37,7 @@
       {% else %}
         <a href="{{ url_for('login') }}">Login</a>
       {% endif %}
-      <a href="{{ url_for('cart') }}">Cart{% if cart_count %}<span class="cart-badge">{{ cart_count }}</span>{% endif %}</a>
+      <a href="{{ url_for('wishlist') }}">Local Wishlist</a>
     </div>
   </div>
 </header>
@@ -37,12 +45,12 @@
 {% with messages = get_flashed_messages(with_categories=true) %}
   {% if messages %}
   <div class="container"><div class="flashes">
-    {% for cat, msg in messages %}<div class="flash {{ cat }}">{{ msg }}</div>{% endfor %}
+    {% for cat, msg in messages %}<div class="flash {{ cat }}" role="status">{{ msg }}</div>{% endfor %}
   </div></div>
   {% endif %}
 {% endwith %}
 
-<main>{% block content %}{% endblock %}</main>
+<main id="main-content">{% block content %}{% endblock %}</main>
 
 <footer class="footer">
   <div class="container">
@@ -68,15 +76,18 @@
       </div>
       <div class="news-signup">
         <h4>Newsletter</h4>
-        <p>Get the latest from NVIDIA.</p>
+        <p>Local newsletter subscription demo.</p>
         <form action="{{ url_for('newsletter') }}" method="post" style="display:flex;margin-top:8px">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <input type="email" name="email" placeholder="Your email" required>
+          <input type="email" name="email" placeholder="Your email" aria-label="Newsletter email" required>
           <button class="btn" type="submit">Subscribe</button>
         </form>
       </div>
     </div>
-    <div class="copyright">© {{ current_year }} NVIDIA Corporation. WebHarbor mirror for research use.</div>
+    <div class="copyright">Unofficial WebHarbor research mirror. Not affiliated with or endorsed by NVIDIA.
+      Catalog prices are fixed mirror snapshots, not live official quotes. No real orders, payments, or email delivery.
+      Wishlist and accounts are local research helpers, not claims about official NVIDIA features.
+      Trademarks and images belong to their respective owners.</div>
   </div>
 </footer>
 <script src="{{ url_for('static', filename='js/main.js') }}"></script>

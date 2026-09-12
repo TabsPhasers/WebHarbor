@@ -3,13 +3,14 @@
 {% block content %}
 
 <div class="page-head">
-  <div class="container"><h1>NVIDIA Drivers</h1><p>Find the latest Game Ready and Studio drivers for your GPU.</p></div>
+  <div class="container"><h1>NVIDIA Drivers</h1><p>Find Game Ready and Studio drivers in the fixed local catalog.</p></div>
 </div>
 
 <section class="section">
   <div class="container">
-    <form method="get" action="{{ url_for('drivers') }}" class="form wide">
-      <div class="row" style="align-items:flex-end;gap:16px">
+    <p class="source-note">Historical mirror driver snapshot. Versions and dates are frozen; the same version can appear across multiple series. This is not a live driver release feed.</p>
+    <form method="get" action="{{ url_for('drivers') }}" class="form wide driver-filter">
+      <div class="driver-fields">
         <div class="field" style="flex:1">
           <label for="series">Product Series</label>
           <select id="series" name="series">
@@ -36,12 +37,15 @@
             {% endfor %}
           </select>
         </div>
-        <div class="field"><button class="btn" type="submit">Search</button></div>
+        <div class="field row"><button class="btn" type="submit">Search</button><a class="text-link" href="{{ url_for('drivers') }}">Clear Filters</a></div>
       </div>
     </form>
 
     {% if searched %}
+      <p class="filter-summary">Selected: {{ series or 'All series' }} · {{ branch or 'Any branch' }} · {{ os_filter or 'Any operating system' }}</p>
       {% if results %}
+      <p class="scroll-hint" id="driver-scroll-help">Scroll horizontally for release dates, sizes, and Details. Keyboard: focus the results region and use arrow keys.</p>
+      <div class="scroll-x" tabindex="0" role="region" aria-label="Driver results" aria-describedby="driver-scroll-help">
       <table class="specs" style="margin-top:24px">
         <thead>
           <tr>
@@ -64,6 +68,7 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
       {% else %}
       <p class="muted" style="margin-top:24px">No drivers match your selection.</p>
       {% endif %}

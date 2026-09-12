@@ -1,0 +1,25 @@
+{# Labels follow the reviewed asset mapping, not inferred SKU identity from filenames. #}
+{% set illustrations = {
+  'geforce-rtx-4060': 'Application illustration — content creation scene',
+  'geforce-rtx-4070-super': 'Series technology illustration — chip artwork',
+  'geforce-rtx-4080-super': 'Series technology illustration — chip artwork',
+  'geforce-rtx-5060-ti': 'Application illustration — desktop PC',
+  'geforce-rtx-5060': 'Application illustration — desktop PC',
+  'geforce-rtx-5070-ti': 'Series illustration — graphics card artwork',
+  'geforce-rtx-5070': 'Series illustration — graphics card artwork',
+  'h100-tensor-core': 'Promotional illustration — connected globe',
+  'l40s': 'Application illustration — virtual 3D scenes',
+  'rtx-pro-6000-blackwell': 'Workstation illustration — desktop setup'
+} %}
+{% macro product_image(p, variant='card') -%}
+  {% if p.image %}
+  {% set label = illustrations.get(p.slug) %}
+  <figure class="product-figure product-figure-{{ variant }}" data-product-image="{{ p.slug }}">
+    <div class="{{ 'media' if variant == 'detail' else 'compare-image' if variant == 'compare' else 'thumb' }}">
+      <img src="{{ url_for('static', filename='images/' + p.image) }}"
+           alt="{{ label ~ '; not a photograph of this model (' ~ p.name ~ ').' if label else p.name }}">
+    </div>
+    {% if label %}<figcaption class="image-caption">{{ label }}; not a photograph of this model.</figcaption>{% endif %}
+  </figure>
+  {% endif %}
+{%- endmacro %}

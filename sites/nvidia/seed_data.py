@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Build-time seed data for the NVIDIA mirror.
 
-All consumed by the gated seed_*() functions in app.py. Specs reflect real
-NVIDIA published figures. Image paths are relative to static/images/.
+All consumed by the gated seed_*() functions in app.py. Prices are fixed mirror
+catalog values, not verified current official quotes. Reference repairs use the
+2026-09-10 cached official pages; see UI_REVIEW_NOTES.md for deltas and scope.
+Image paths are relative to static/images/.
 """
 from datetime import date
 
@@ -57,28 +59,28 @@ PRODUCTS = [
        boost_clock_ghz=2.45, tdp_watts=300, interface="PCIe 5.0",
        recommended_psu_watts=750),
     _p("geforce-rtx-5070", "GeForce RTX 5070", "GeForce Gaming", "RTX 50 Series",
-       549, "RTX 4090 performance at a fraction of the power.",
+       549, "Blackwell graphics with 12 GB of GDDR7.",
        "The RTX 5070 pairs 12 GB of GDDR7 with DLSS 4 to deliver flagship-class frames "
        "in today's most demanding titles.",
        featured=True, year=2025, architecture="Blackwell", cuda_cores=6144,
        tensor_cores=192, rt_cores=48, memory_gb=12, memory_type="GDDR7",
        memory_bandwidth="672 GB/s", boost_clock_ghz=2.51, tdp_watts=250,
        interface="PCIe 5.0", recommended_psu_watts=650),
-    _p("geforce-rtx-5060-ti", "GeForce RTX 5060 Ti", "GeForce Gaming", "RTX 50 Series",
+    _p("geforce-rtx-5060-ti", "GeForce RTX 5060 Ti 16GB", "GeForce Gaming", "RTX 50 Series",
        429, "Mainstream gaming, supercharged.",
        "With 16 GB of GDDR7, the RTX 5060 Ti makes high-fidelity 1440p gaming and local "
-       "AI workloads accessible.",
+       "AI workloads accessible. This fixed catalog entry is the 16GB variant, not the 8GB variant.",
        year=2025, architecture="Blackwell", cuda_cores=4608, tensor_cores=144,
        rt_cores=36, memory_gb=16, memory_type="GDDR7", memory_bandwidth="448 GB/s",
        boost_clock_ghz=2.57, tdp_watts=180, interface="PCIe 5.0",
-       recommended_psu_watts=550),
+       recommended_psu_watts=600),
     _p("geforce-rtx-5060", "GeForce RTX 5060", "GeForce Gaming", "RTX 50 Series",
        299, "DLSS 4 for every gamer.",
        "The RTX 5060 brings Blackwell and DLSS 4 to the most popular price point in PC gaming.",
        year=2025, architecture="Blackwell", cuda_cores=3840, tensor_cores=120,
        rt_cores=30, memory_gb=8, memory_type="GDDR7", memory_bandwidth="448 GB/s",
        boost_clock_ghz=2.50, tdp_watts=145, interface="PCIe 5.0",
-       recommended_psu_watts=450),
+       recommended_psu_watts=550),
     # ---- GeForce Gaming — RTX 40 Series (Ada Lovelace) ----
     _p("geforce-rtx-4090", "GeForce RTX 4090", "GeForce Gaming", "RTX 40 Series",
        1599, "Beyond fast. The Ada Lovelace flagship.",
@@ -185,8 +187,10 @@ PRODUCTS = [
     # ---- Embedded / Edge (Jetson) ----
     _p("jetson-orin-nano-super", "Jetson Orin Nano Super Developer Kit", "Embedded",
        "Jetson Orin", 249, "The world's most affordable generative AI computer.",
-       "67 TOPS of AI performance in a tiny module — the Jetson Orin Nano Super powers "
-       "edge robotics, vision, and on-device LLMs.",
+       "Development hardware: an 8 GB LPDDR5 developer kit, comprising a Jetson Orin Nano "
+       "module and reference carrier board. The Jetson Orin Nano Super Developer Kit "
+       "provides up to 67 TOPS for prototyping edge robotics, vision, and on-device AI; "
+       "it is not the Jetson Orin NX 16GB production module.",
        featured=True, year=2024, architecture="Ampere", cuda_cores=1024,
        memory_gb=8, memory_type="LPDDR5", memory_bandwidth="102 GB/s", tdp_watts=25,
        interface="—"),
@@ -198,7 +202,10 @@ PRODUCTS = [
        memory_type="LPDDR5", memory_bandwidth="204 GB/s", tdp_watts=60, interface="—"),
     _p("jetson-orin-nx", "Jetson Orin NX 16GB", "Embedded", "Jetson Orin",
        699, "Compact power for autonomous machines.",
-       "100 TOPS in a small module for drones, robots, and smart cameras.",
+       "Production hardware: a 16 GB LPDDR5 production module for integration into drones, "
+       "robots, and smart cameras, not a developer kit with a carrier board. This catalog "
+       "retains the original 100 TOPS / 10–25 W mode; newer Super-mode figures depend on "
+       "software and power configuration and are not mixed into this spec sheet.",
        year=2023, architecture="Ampere", cuda_cores=1024, memory_gb=16,
        memory_type="LPDDR5", memory_bandwidth="102 GB/s", tdp_watts=25, interface="—"),
 

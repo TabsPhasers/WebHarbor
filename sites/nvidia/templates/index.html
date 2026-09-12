@@ -11,13 +11,13 @@
       <p>{{ flagship.tagline }}</p>
       <div class="row" style="margin-top:24px">
         <a class="btn" href="{{ url_for('product_detail', slug=flagship.slug) }}">Learn More</a>
-        <a class="btn btn-ghost" href="{{ url_for('products', category='geforce-gaming') }}">Shop GeForce</a>
+        <a class="btn btn-ghost" href="{{ url_for('geforce_series', series_slug='50-series') }}">Explore RTX 50 Series</a>
       </div>
     </div>
     <div class="hero-media">
       {% if flagship.image %}
       <img src="{{ url_for('static', filename='images/' + flagship.image) }}"
-           alt="{{ flagship.name }}" onerror="this.style.visibility='hidden'">
+           alt="{{ flagship.name }}">
       {% endif %}
     </div>
   </div>
@@ -28,6 +28,10 @@
   <div class="container">
     <h2>Explore Products</h2>
     <p class="sub">From gaming GPUs to data-center accelerators.</p>
+    <div class="series-links">
+      <a class="feature-panel" href="{{ url_for('geforce_series', series_slug='50-series') }}"><h3>GeForce RTX 50 Series</h3><p>Blackwell. Neural rendering and AI-powered graphics.</p><strong>Explore architecture and models →</strong></a>
+      <a class="feature-panel" href="{{ url_for('geforce_series', series_slug='40-series') }}"><h3>GeForce RTX 40 Series</h3><p>Ada Lovelace. Ray tracing and DLSS 3.</p><strong>Explore architecture and models →</strong></a>
+    </div>
     <div class="pills">
       {% for name, slug in CATEGORIES %}
       <a class="pill" href="{{ url_for('products', category=slug) }}">{{ name }}</a>
@@ -59,7 +63,7 @@
         <div class="thumb">
           {% if a.image %}
           <img src="{{ url_for('static', filename='images/' + a.image) }}"
-               alt="{{ a.title }}" onerror="this.style.visibility='hidden'">
+               alt="{{ a.title }}">
           {% endif %}
         </div>
         <div class="body">

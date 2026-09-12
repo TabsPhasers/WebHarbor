@@ -4,12 +4,13 @@
 Models a faithful slice of nvidia.com for the WebHarbor benchmark: a product
 catalog of GPUs/hardware (GeForce gaming, Studio/Professional, Data Center,
 Embedded, Consumer Devices) with full spec sheets, a spec-comparison tool, a
-driver-download finder, a news/blog section, search, accounts, cart/checkout,
-wishlist, and product reviews.
+driver finder, news, search, local demo accounts, buying information,
+local wishlist, and product reviews. No orders or payments are accepted.
 """
 import os
 import re
 from datetime import datetime, date
+from urllib.parse import urlsplit
 
 from flask import (Flask, render_template, request, redirect, url_for,
                    flash, jsonify, abort)
@@ -263,16 +264,8 @@ class ReviewForm(FlaskForm):
     body = TextAreaField('Your review', validators=[DataRequired(), Length(max=2000)])
 
 
-class CheckoutForm(FlaskForm):
-    full_name = StringField('Full name', validators=[DataRequired()])
-    address = StringField('Shipping address', validators=[DataRequired()])
-    city = StringField('City', validators=[DataRequired()])
-    zip_code = StringField('ZIP / Postal code', validators=[DataRequired()])
-    card = StringField('Card number', validators=[DataRequired(), Length(min=12, max=19)])
-
-
 class SimpleForm(FlaskForm):
-    """CSRF-only form for POST actions (add to cart, wishlist, download, etc.)."""
+    """CSRF-only form for local wishlist and driver demonstration actions."""
 
 
 # --------------------------------------------------------------------------
@@ -303,10 +296,7 @@ def _article_hay(a):
 # --------------------------------------------------------------------------
 @app.context_processor
 def inject_globals():
-    cart_count = 0
-    if current_user.is_authenticated:
-        cart_count = sum(c.quantity for c in current_user.cart_items)
-    return {'CATEGORIES': CATEGORIES, 'cart_count': cart_count,
+    return {'CATEGORIES': CATEGORIES,
             'current_year': 2026, 'simple_form': SimpleForm()}
 
 
@@ -374,9 +364,34 @@ def product_detail(slug):
                            review_form=ReviewForm())
 
 
+@app.route('/geforce/graphics-cards/<series_slug>/')
+def geforce_series(series_slug):
+    if series_slug not in ('50-series', '40-series'):
+        abort(404)
+    generation = series_slug[:2]
+    items = Product.query.filter_by(series=f'RTX {generation} Series').order_by(
+        Product.price_usd.desc()).all()
+    return render_template('geforce_series.html', generation=generation, items=items)
+
+
+@app.route('/where-to-buy')
+def buying_options():
+    items = Product.query.order_by(Product.category, Product.name).all()
+    return render_template('buying_options.html', items=items)
+
+
+@app.route('/where-to-buy/<slug>')
+def where_to_buy(slug):
+    p = Product.query.filter_by(slug=slug).first_or_404()
+    in_wishlist = current_user.is_authenticated and WishlistItem.query.filter_by(
+        user_id=current_user.id, product_id=p.id).first() is not None
+    return render_template('where_to_buy.html', p=p, in_wishlist=in_wishlist)
+
+
 @app.route('/compare')
 def compare():
-    ids = [s for s in request.args.get('ids', '').split(',') if s.strip()]
+    ids = request.args.getlist('product') or request.args.get('ids', '').split(',')
+    ids = list(dict.fromkeys(s.strip() for s in ids if s.strip()))
     items = []
     for s in ids:
         p = Product.query.filter_by(slug=s.strip()).first()
@@ -418,7 +433,8 @@ def driver_download(driver_id):
     d = db.session.get(Driver, driver_id) or abort(404)
     d.download_count += 1
     db.session.commit()
-    flash(f'Download started: {d.product_series} driver {d.version} ({d.branch}).', 'success')
+    flash(f'Local download demo recorded: {d.product_series} driver {d.version} '
+          f'({d.branch}). No driver file was downloaded.', 'success')
     return redirect(url_for('driver_detail', driver_id=driver_id))
 
 
@@ -471,8 +487,8 @@ def login():
         user = User.query.filter_by(email=form.email.data.lower().strip()).first()
         if user and user.check_password(form.password.data):
             login_user(user)
-            nxt = request.args.get('next')
-            return redirect(nxt or url_for('account'))
+            nxt = request.form.get('next') or request.args.get('next')
+            return redirect(local_return_path(nxt, url_for('account')))
         flash('Invalid email or password.', 'error')
     return render_template('login.html', form=form)
 
@@ -493,7 +509,7 @@ def register():
             db.session.add(u)
             db.session.commit()
             login_user(u)
-            flash('Welcome to NVIDIA. Your account has been created.', 'success')
+            flash('Your local mirror account has been created.', 'success')
             return redirect(url_for('account'))
     return render_template('register.html', form=form)
 
@@ -555,84 +571,33 @@ def wishlist():
 
 
 # --------------------------------------------------------------------------
-# Cart + checkout
+# Legacy commerce URLs — read-only redirects; POST never mutates state
 # --------------------------------------------------------------------------
 @app.route('/cart')
-@login_required
 def cart():
-    items = CartItem.query.filter_by(user_id=current_user.id).all()
-    subtotal = sum((c.product.price_usd or 0) * c.quantity for c in items)
-    return render_template('cart.html', items=items, subtotal=subtotal)
+    return redirect(url_for('buying_options'))
 
 
 @app.route('/cart/add/<int:product_id>', methods=['POST'])
-@login_required
 def cart_add(product_id):
-    p = db.session.get(Product, product_id) or abort(404)
-    if p.price_usd is None:
-        flash(f'{p.name} is sold through NVIDIA sales — contact sales for a quote.', 'info')
-        return redirect(url_for('product_detail', slug=p.slug))
-    item = CartItem.query.filter_by(user_id=current_user.id, product_id=p.id).first()
-    if item:
-        item.quantity += 1
-    else:
-        db.session.add(CartItem(user_id=current_user.id, product_id=p.id, quantity=1))
-    db.session.commit()
-    flash(f'Added {p.name} to your cart.', 'success')
-    return redirect(request.referrer or url_for('cart'))
+    return render_template('commerce_retired.html'), 410
 
 
 @app.route('/cart/update/<int:item_id>', methods=['POST'])
-@login_required
 def cart_update(item_id):
-    item = db.session.get(CartItem, item_id) or abort(404)
-    if item.user_id != current_user.id:
-        abort(403)
-    qty = request.form.get('quantity', type=int) or 1
-    item.quantity = max(1, qty)
-    db.session.commit()
-    return redirect(url_for('cart'))
+    return render_template('commerce_retired.html'), 410
 
 
 @app.route('/cart/remove/<int:item_id>', methods=['POST'])
-@login_required
 def cart_remove(item_id):
-    item = db.session.get(CartItem, item_id) or abort(404)
-    if item.user_id != current_user.id:
-        abort(403)
-    db.session.delete(item)
-    db.session.commit()
-    flash('Item removed from cart.', 'info')
-    return redirect(url_for('cart'))
+    return render_template('commerce_retired.html'), 410
 
 
 @app.route('/checkout', methods=['GET', 'POST'])
-@login_required
 def checkout():
-    items = CartItem.query.filter_by(user_id=current_user.id).all()
-    if not items:
-        flash('Your cart is empty.', 'info')
-        return redirect(url_for('cart'))
-    subtotal = sum((c.product.price_usd or 0) * c.quantity for c in items)
-    tax = round(subtotal * 0.0875)
-    total = subtotal + tax
-    form = CheckoutForm()
     if request.method == 'GET':
-        form.full_name.data = current_user.name
-    if form.validate_on_submit():
-        order = Order(user_id=current_user.id, status='Processing', total_usd=total)
-        db.session.add(order)
-        db.session.flush()
-        for c in items:
-            db.session.add(OrderItem(order_id=order.id, product_id=c.product_id,
-                                     name=c.product.name, price_usd=c.product.price_usd,
-                                     quantity=c.quantity))
-            db.session.delete(c)
-        db.session.commit()
-        flash('Order placed! A confirmation has been emailed to you.', 'success')
-        return redirect(url_for('order_detail', order_id=order.id))
-    return render_template('checkout.html', items=items, subtotal=subtotal,
-                           tax=tax, total=total, form=form)
+        return redirect(url_for('buying_options'))
+    return render_template('commerce_retired.html'), 410
 
 
 @app.route('/order/<int:order_id>')
@@ -647,6 +612,24 @@ def order_detail(order_id):
 # --------------------------------------------------------------------------
 # Wishlist + reviews + newsletter (POST actions)
 # --------------------------------------------------------------------------
+def local_return_path(value, fallback):
+    """Keep login/POST returns on this mirror, including absolute same-origin refs."""
+    if not value or '\\' in value or any(ord(c) < 32 for c in value):
+        return fallback
+    try:
+        target = urlsplit(value)
+        origin = urlsplit(request.host_url)
+    except ValueError:
+        return fallback
+    if target.netloc and (target.scheme, target.netloc) != (origin.scheme, origin.netloc):
+        return fallback
+    if target.scheme and target.scheme not in ('http', 'https'):
+        return fallback
+    if not target.path.startswith('/') or target.path.startswith('//'):
+        return fallback
+    return target.path + ('?' + target.query if target.query else '')
+
+
 @app.route('/wishlist/toggle/<int:product_id>', methods=['POST'])
 @login_required
 def wishlist_toggle(product_id):
@@ -660,7 +643,7 @@ def wishlist_toggle(product_id):
         db.session.add(WishlistItem(user_id=current_user.id, product_id=p.id))
         db.session.commit()
         flash(f'Saved {p.name} to your wishlist.', 'success')
-    return redirect(request.referrer or url_for('product_detail', slug=p.slug))
+    return redirect(local_return_path(request.referrer, url_for('product_detail', slug=p.slug)))
 
 
 @app.route('/products/<slug>/review', methods=['POST'])
@@ -697,7 +680,7 @@ def newsletter():
         db.session.add(NewsletterSubscriber(email=email, topic=topic))
         db.session.commit()
         flash(f'Subscribed to {topic} updates. Welcome aboard!', 'success')
-    return redirect(request.referrer or url_for('index'))
+    return redirect(local_return_path(request.referrer, url_for('index')))
 
 
 @app.errorhandler(404)

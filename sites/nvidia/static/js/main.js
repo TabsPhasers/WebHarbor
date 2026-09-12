@@ -1,7 +1,13 @@
 // NVIDIA mirror — minimal progressive enhancement
 document.addEventListener('DOMContentLoaded', function () {
-  // auto-dismiss flash messages after a few seconds
-  document.querySelectorAll('.flash').forEach(function (el) {
-    setTimeout(function () { el.style.transition = 'opacity .4s'; el.style.opacity = '0'; }, 6000);
+  // Keep business feedback readable until the next navigation.
+  // Escape closes the native details menu and returns focus to its control.
+  document.querySelectorAll('.site-menu').forEach(function (menu) {
+    menu.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape' && menu.open) {
+        menu.open = false;
+        menu.querySelector('summary').focus();
+      }
+    });
   });
 });

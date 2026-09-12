@@ -22,7 +22,7 @@
         <div class="thumb">
           {% if a.image %}
           <img src="{{ url_for('static', filename='images/' + a.image) }}"
-               alt="{{ a.title }}" onerror="this.style.visibility='hidden'">
+               alt="{{ a.title }}">
           {% endif %}
         </div>
         <div class="body">

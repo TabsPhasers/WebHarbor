@@ -9,7 +9,7 @@
     <div class="meta">{{ a.author }} · {{ a.published.strftime('%b %d, %Y') }} · {{ a.read_minutes }} min read</div>
     {% if a.image %}
     <img src="{{ url_for('static', filename='images/' + a.image) }}"
-         alt="{{ a.title }}" onerror="this.style.visibility='hidden'">
+         alt="{{ a.title }}">
     {% endif %}
     {% for para in a.body.split('\n\n') %}
       {% if para.strip() %}<p>{{ para.strip() }}</p>{% endif %}
@@ -27,7 +27,7 @@
         <div class="thumb">
           {% if a.image %}
           <img src="{{ url_for('static', filename='images/' + a.image) }}"
-               alt="{{ a.title }}" onerror="this.style.visibility='hidden'">
+               alt="{{ a.title }}">
           {% endif %}
         </div>
         <div class="body">

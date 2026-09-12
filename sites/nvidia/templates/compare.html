@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_product_image.html" import product_image %}
 {% block title %}Compare GPUs — NVIDIA{% endblock %}
 {% block content %}
 
@@ -8,11 +9,12 @@
 
 <section class="section">
   <div class="container">
-    <form id="cmp-form" onsubmit="return doCompare(event)">
+    {% include "_price_note.html" %}
+    <form id="cmp-form" method="get" action="{{ url_for('compare') }}">
       <div class="pills">
         {% for ap in all_products %}
         <label class="pill check">
-          <input type="checkbox" class="cmp-box" value="{{ ap.slug }}"
+          <input type="checkbox" class="cmp-box" name="product" value="{{ ap.slug }}"
                  {% if ap in items %}checked{% endif %}>
           {{ ap.name }}
         </label>
@@ -22,7 +24,8 @@
     </form>
 
     {% if items %}
-    <div class="scroll-x" style="margin-top:28px">
+    <p class="scroll-hint" id="compare-scroll-help">Scroll horizontally to view all selected models. Keyboard: focus the table region and use arrow keys.</p>
+    <div class="scroll-x" tabindex="0" role="region" aria-label="Product comparison" aria-describedby="compare-scroll-help" style="margin-top:28px">
       <table class="compare-tbl">
         <thead>
           <tr>
@@ -30,11 +33,7 @@
             {% for p in items %}
             <th>
               <a href="{{ url_for('product_detail', slug=p.slug) }}" style="color:#fff">
-                {% if p.image %}
-                <img src="{{ url_for('static', filename='images/' + p.image) }}"
-                     alt="{{ p.name }}" style="height:60px;margin:0 auto 6px;object-fit:contain"
-                     onerror="this.style.visibility='hidden'">
-                {% endif %}
+                {{ product_image(p, 'compare') }}
                 {{ p.name }}
               </a>
             </th>
@@ -42,7 +41,8 @@
           </tr>
         </thead>
         <tbody>
-          <tr><td>Price</td>{% for p in items %}<td>{{ p.price_display }}</td>{% endfor %}</tr>
+          <tr><td>Fixed catalog price</td>{% for p in items %}<td>{{ p.price_display }}</td>{% endfor %}</tr>
+          <tr><td>Product description / identity</td>{% for p in items %}<td>{{ p.description }}</td>{% endfor %}</tr>
           <tr><td>Series</td>{% for p in items %}<td>{{ p.series or '—' }}</td>{% endfor %}</tr>
           <tr><td>Architecture</td>{% for p in items %}<td>{{ p.architecture or '—' }}</td>{% endfor %}</tr>
           <tr><td>CUDA Cores</td>{% for p in items %}<td>{{ '{:,}'.format(p.cuda_cores) if p.cuda_cores else '—' }}</td>{% endfor %}</tr>
@@ -57,20 +57,11 @@
         </tbody>
       </table>
     </div>
+    {% for p in items %}{% include "_psu_note.html" %}{% endfor %}
     {% else %}
     <p class="muted" style="margin-top:28px">Select two or more products above and click "Compare Selected" to see a side-by-side spec sheet.</p>
     {% endif %}
   </div>
 </section>
-
-<script>
-function doCompare(e){
-  e.preventDefault();
-  var ids = Array.prototype.slice.call(document.querySelectorAll('.cmp-box:checked'))
-                 .map(function(b){return b.value;});
-  window.location = "{{ url_for('compare') }}?ids=" + encodeURIComponent(ids.join(','));
-  return false;
-}
-</script>
 
 {% endblock %}
