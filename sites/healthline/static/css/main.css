@@ -35,8 +35,11 @@ img { max-width: 100%; display: block; }
   position: sticky; top: 0; background: #fff; z-index: 50;
 }
 .header-top {
-  display: flex; align-items: center; gap: 20px;
+  display: flex; align-items: center; gap: 12px 20px;
   padding: 14px 0;
+  /* wrap instead of overflowing: the header used to keep logo + search + actions
+     on one 613px-wide row, which pushed the actions off-screen below 620px */
+  flex-wrap: wrap;
 }
 .logo {
   font-size: 26px; font-weight: 800; letter-spacing: -0.5px;
@@ -45,10 +48,10 @@ img { max-width: 100%; display: block; }
 .logo .dot { color: var(--hl-teal); }
 .logo:hover { text-decoration: none; }
 
-.search-form { flex: 1; display: flex; max-width: 480px; }
+.search-form { flex: 1 1 240px; display: flex; max-width: 480px; min-width: 0; }
 .search-form input[type="search"], .search-form input[type="text"] {
-  flex: 1; padding: 10px 14px; border: 1px solid var(--hl-border);
-  border-radius: 22px 0 0 22px; font-size: 15px; outline: none;
+  flex: 1; min-width: 0; padding: 10px 14px; border: 1px solid var(--hl-border);
+  border-radius: 22px 0 0 22px; font-size: 15px;
 }
 .search-form input:focus { border-color: var(--hl-teal); }
 .search-form button {
@@ -227,6 +230,19 @@ img { max-width: 100%; display: block; }
 @media (max-width: 820px) {
   .hero-grid, .account-grid { grid-template-columns: 1fr; }
   .hero-main img { height: 240px; }
+}
+
+/* Small phones: let the search box take its own row so the logo and the
+   account actions stay fully visible. */
+@media (max-width: 560px) {
+  .header-top { gap: 10px; }
+  .logo { font-size: 22px; }
+  .search-form { order: 3; flex: 1 1 100%; max-width: none; }
+  .header-actions { gap: 8px; }
+  .account-grid { gap: 18px; }
+  .page-head h1 { font-size: 24px; }
+  .spec-table th { width: auto; }
+  .detail-head img { width: 100%; height: auto; }
 }
 
 /* Footer sign-out is a POST form; render its button like the surrounding links. */
