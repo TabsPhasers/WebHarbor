@@ -12,6 +12,8 @@ def main():
     t = load_run(a.run_dir); fa = final_answer(t)
     j.check("nav_article", navigated_to(t, "/article/magnesium-benefits"),
             "expected the '10 Evidence-Based Health Benefits of Magnesium' article")
+    j.check("answer_reviewer", contains_any(fa, ["Kim Chin"]),
+            f"expected the reviewer's name (Kim Chin); final={fa!r}")
     j.check("answer_credentials", contains_any(fa, ["RD", "registered dietitian"]),
             f"expected the reviewer's credentials (RD); final={fa!r}")
     ok, ev = llm_text_match(fa, "reviewed by Kim Chin, RD (registered dietitian)",

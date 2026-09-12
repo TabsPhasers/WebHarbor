@@ -13,6 +13,8 @@ def main():
     t = load_run(a.run_dir); fa = final_answer(t)
     j.check("nav_condition", navigated_to(t, "/condition/hypertension"),
             "expected the High Blood Pressure (hypertension) condition page")
+    j.check("answer_condition", contains_any(fa, ["high blood pressure", "hypertension", "silent killer"]),
+            f"expected the condition identity (hypertension / high blood pressure); final={fa!r}")
     j.check("answer_detect", contains_any(fa, ["measurement", "measur", "blood pressure reading",
                                                "blood pressure check", "monitor", "cuff"]),
             f"expected the detection method (a simple measurement); final={fa!r}")

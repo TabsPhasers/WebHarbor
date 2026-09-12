@@ -87,8 +87,32 @@ def count_matches(final, tokens):
     return sum(1 for t in tokens if norm(t) in f)
 
 def number_mentioned(final, amount):
+    """Match a number as a standalone numeric token, not a substring.
+
+    Boundary-aware so 600 does not match 1600 and 30 does not match 300.
+    """
     f = norm(final)
-    return str(amount) in f or f"{amount:,}" in f
+    patterns = [rf"(?<![\d,.]){amount}(?![\d,])"]
+    if amount >= 1000:
+        patterns.append(rf"(?<![\d,.]){amount:,}(?![\d,])")
+    return any(re.search(p, f) for p in patterns)
+
+
+def amount_with_unit(final, amount, units):
+    """True only if `amount` appears as a standalone number with a listed unit nearby."""
+    if not number_mentioned(final, amount):
+        return False
+    f = norm(final)
+    return any(norm(u) in f for u in units)
+
+
+def count_groups(final, groups):
+    """Count distinct concept groups matched, so overlapping tokens in one phrase count once.
+
+    `groups` is a list of alternative-token lists; each list is one distinct concept.
+    """
+    f = norm(final)
+    return sum(1 for group in groups if any(norm(token) in f for token in group))
 
 # ---------------------------------------------------------------- DB state
 def fetch_db(container, kind):

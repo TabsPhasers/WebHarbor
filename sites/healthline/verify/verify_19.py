@@ -6,11 +6,12 @@ that are severe, sudden, or accompanied by fever, stiff neck, confusion, or weak
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from verify_lib import (load_run, final_answer, navigated_to, count_matches, contains_any,
+from verify_lib import (load_run, final_answer, navigated_to, count_groups, contains_any,
                         llm_text_match, Judge, parse_args)
 
-TRIGGERS = ["stress", "sleep", "skipped meal", "meals", "food", "additive", "bright light",
-            "light", "hormon"]
+# each inner list is ONE distinct trigger concept; overlapping tokens count once
+TRIGGER_GROUPS = [["stress"], ["sleep"], ["meal"], ["food", "additive"],
+                  ["bright light"], ["hormon"]]
 
 def main():
     a = parse_args(); j = Judge('Healthline--19', a.no_llm)
@@ -19,8 +20,8 @@ def main():
             "expected the migraine triggers article")
     j.check("nav_condition", navigated_to(t, "/condition/migraine"),
             "expected the Migraine condition page")
-    j.check("answer_three_triggers", count_matches(fa, TRIGGERS) >= 3,
-            f"expected >=3 migraine triggers; final={fa!r}")
+    j.check("answer_three_triggers", count_groups(fa, TRIGGER_GROUPS) >= 3,
+            f"expected >=3 distinct migraine triggers; final={fa!r}")
     j.check("answer_when_to_see", contains_any(fa, ["severe", "sudden", "fever", "stiff neck",
                                                     "confusion", "weakness", "see a doctor"]),
             "expected the 'when to see a doctor' guidance from the condition page")

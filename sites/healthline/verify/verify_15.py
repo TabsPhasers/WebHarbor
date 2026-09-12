@@ -13,9 +13,12 @@ def main():
     j.check("nav_drug", navigated_to(t, "/drug/atorvastatin"), "expected the atorvastatin drug page")
     j.check("answer_grapefruit", contains_any(fa, ["grapefruit"]),
             f"expected mention of grapefruit; final={fa!r}")
-    # answer must affirm it IS an interaction (not deny)
-    j.check("answer_affirms", not contains_any(fa, ["not listed", "not an interaction", "no interaction", "isn't"]),
-            "answer must affirm grapefruit juice IS an interaction")
+    # answer must affirm it IS an interaction, not deny it
+    affirm = contains_any(fa, ["yes", "is listed", "listed as", "is an interaction", "interacts"])
+    negate = contains_any(fa, ["not", "no ", "no,", "isn't", "without", "absent", "none",
+                               "does not", "doesn't"])
+    j.check("answer_affirms", affirm and not negate,
+            f"answer must affirm grapefruit juice IS an interaction; final={fa!r}")
     ok, ev = llm_text_match(fa, "yes — grapefruit juice is listed as an interaction to be aware of for atorvastatin",
                             "Is grapefruit juice listed as an interaction on the atorvastatin page?")
     j.check("answer_consistent", ok, ev, llm=True)
