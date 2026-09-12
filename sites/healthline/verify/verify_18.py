@@ -19,6 +19,7 @@ def main():
     j.check("nav_password", navigated_to(t, "/account/password"), "expected the change-password page")
     j.check("db_password_changed", bool(ha) and bool(hi) and ha != hi,
             f"carol's password_hash must change (initial != after)")
+    j.check_screenshots(t)
     j.emit()
 
 if __name__ == '__main__':

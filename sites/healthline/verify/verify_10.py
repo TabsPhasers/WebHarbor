@@ -18,6 +18,7 @@ def main():
     j.check("nav_account", navigated_any(t, ["/account"]), "expected to land on the account page")
     j.check("db_user_created", user_exists(after, EMAIL) and not user_exists(init, EMAIL),
             f"user {EMAIL} after={user_exists(after, EMAIL)} initial={user_exists(init, EMAIL)}")
+    j.check_screenshots(t)
     j.emit()
 
 if __name__ == '__main__':

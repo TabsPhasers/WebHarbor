@@ -20,6 +20,7 @@ def main():
     j.check("nav_article", navigated_to(t, f"/article/{SLUG}"), "expected the Healthy Eating guide article")
     j.check("db_saved", SLUG in sa and SLUG not in si,
             f"'{SLUG}' saved after={SLUG in sa}, initial={SLUG in si} (agent must save it)")
+    j.check_screenshots(t)
     j.emit()
 
 if __name__ == '__main__':

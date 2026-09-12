@@ -2,7 +2,7 @@
 """Healthline--1: Nutrition > Diets — the Mediterranean eating-pattern article. GT title."""
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from verify_lib import (load_run, final_answer, navigated_any, contains_any, llm_text_match, Judge, parse_args, run)
+from verify_lib import (resolve_db, load_run, final_answer, navigated_any, contains_any, llm_text_match, Judge, parse_args, run)
 def main():
     a = parse_args(); j = Judge('Healthline--1', a.no_llm)
     t = load_run(a.run_dir); fa = final_answer(t)
@@ -13,6 +13,10 @@ def main():
     ok, ev = llm_text_match(fa, "The Mediterranean Diet: A Complete Guide and Meal Plan",
                             "Which Nutrition/Diets article covers the Mediterranean eating pattern?")
     j.check("answer_consistent", ok, ev, llm=True)
+    j.check_screenshots(t)
+    _init = resolve_db(a.initial_db, a.container, "instance_seed")
+    _after = resolve_db(a.after_db, a.container, "instance")
+    j.check_readonly(_init, _after)
     j.emit()
 if __name__ == '__main__':
     run(main, 'Healthline--1')

@@ -23,6 +23,10 @@ def main():
             f"expected all history in health-conditions; sections={sections}")
     j.check("answer_names_section", contains_any(fa, ["Health Conditions", "health-conditions"]),
             f"expected the Health Conditions section; final={fa!r}")
+    j.check_screenshots(t)
+    _init = resolve_db(a.initial_db, a.container, "instance_seed")
+    _after = resolve_db(a.after_db, a.container, "instance")
+    j.check_readonly(_init, _after)
     j.emit()
 
 if __name__ == '__main__':

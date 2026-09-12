@@ -4,7 +4,7 @@ GT: 30 minutes. (Disambiguation: 'benefits-of-walking', not the walking-blood-su
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from verify_lib import (load_run, final_answer, navigated_to, number_mentioned, llm_text_match, Judge, parse_args, run)
+from verify_lib import (resolve_db, load_run, final_answer, navigated_to, number_mentioned, llm_text_match, Judge, parse_args, run)
 
 def main():
     a = parse_args(); j = Judge('Healthline--4', a.no_llm)
@@ -15,6 +15,10 @@ def main():
     ok, ev = llm_text_match(fa, "aim for 30 minutes of brisk walking most days of the week",
                             "How many minutes of brisk walking does the article suggest aiming for?")
     j.check("answer_consistent", ok, ev, llm=True)
+    j.check_screenshots(t)
+    _init = resolve_db(a.initial_db, a.container, "instance_seed")
+    _after = resolve_db(a.after_db, a.container, "instance")
+    j.check_readonly(_init, _after)
     j.emit()
 
 if __name__ == '__main__':

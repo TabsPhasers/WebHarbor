@@ -19,6 +19,10 @@ def main():
     # a missing/unreadable initial DB is an infrastructure failure, never a zero count
     j.check("answer_count", saved is not None and number_mentioned(fa, len(saved)),
             f"expected saved count from DB; db_available={saved is not None}; final={fa!r}")
+    j.check_screenshots(t)
+    _init = resolve_db(a.initial_db, a.container, "instance_seed")
+    _after = resolve_db(a.after_db, a.container, "instance")
+    j.check_readonly(_init, _after)
     j.emit()
 
 if __name__ == '__main__':
