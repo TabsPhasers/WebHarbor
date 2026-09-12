@@ -5,7 +5,7 @@ nav /history + answer names the section, cross-checked against the DB.
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from verify_lib import (load_run, final_answer, navigated_any, contains_any, resolve_db, reading_history_for, Judge, parse_args, run)
+from verify_lib import (affirmed_any, load_run, final_answer, navigated_any, contains_any, resolve_db, reading_history_for, Judge, parse_args, run)
 
 EMAIL = "bob.c@test.com"
 
@@ -21,8 +21,8 @@ def main():
     # ground truth: bob's history is all in one section
     j.check("db_single_section", sections == {"health-conditions"},
             f"expected all history in health-conditions; sections={sections}")
-    j.check("answer_names_section", contains_any(fa, ["Health Conditions", "health-conditions"]),
-            f"expected the Health Conditions section; final={fa!r}")
+    j.check("answer_names_section", affirmed_any(fa, ["Health Conditions", "health-conditions"]),
+            f"expected the Health Conditions section, stated affirmatively; final={fa!r}")
     j.check_screenshots(t)
     _init = resolve_db(a.initial_db, a.container, "instance_seed")
     _after = resolve_db(a.after_db, a.container, "instance")

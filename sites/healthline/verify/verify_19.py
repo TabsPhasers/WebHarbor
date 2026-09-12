@@ -6,7 +6,7 @@ that are severe, sudden, or accompanied by fever, stiff neck, confusion, or weak
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from verify_lib import (resolve_db, load_run, final_answer, navigated_to, count_groups, contains_any, llm_text_match, Judge, parse_args, run)
+from verify_lib import (affirmed_any, resolve_db, load_run, final_answer, navigated_to, count_groups, contains_any, llm_text_match, Judge, parse_args, run)
 
 # each inner list is ONE distinct trigger concept; overlapping tokens count once
 TRIGGER_GROUPS = [["stress"], ["sleep"], ["meal"], ["food", "additive"],
@@ -21,9 +21,9 @@ def main():
             "expected the Migraine condition page")
     j.check("answer_three_triggers", count_groups(fa, TRIGGER_GROUPS) >= 3,
             f"expected >=3 distinct migraine triggers; final={fa!r}")
-    j.check("answer_when_to_see", contains_any(fa, ["severe", "sudden", "fever", "stiff neck",
-                                                    "confusion", "weakness", "see a doctor"]),
-            "expected the 'when to see a doctor' guidance from the condition page")
+    j.check("answer_when_to_see", affirmed_any(fa, ["see a doctor", "severe", "sudden", "fever",
+                                                    "stiff neck", "confusion", "weakness"]),
+            "expected the 'when to see a doctor' guidance, stated affirmatively")
     ok, ev = llm_text_match(fa, "triggers such as stress, sleep changes, skipped meals, certain "
                             "foods, bright lights, hormonal changes; see a doctor if headaches are "
                             "severe, sudden, or come with fever/stiff neck/confusion/weakness",

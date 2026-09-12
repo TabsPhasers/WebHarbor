@@ -5,18 +5,22 @@ a simple measurement (a blood-pressure measurement/reading).
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from verify_lib import (resolve_db, load_run, final_answer, navigated_to, contains_any, llm_text_match, Judge, parse_args, run)
+from verify_lib import (affirmed_any, pair_affirmed, resolve_db, load_run, final_answer, navigated_to, contains_any, llm_text_match, Judge, parse_args, run)
 
 def main():
     a = parse_args(); j = Judge('Healthline--17', a.no_llm)
     t = load_run(a.run_dir); fa = final_answer(t)
     j.check("nav_condition", navigated_to(t, "/condition/hypertension"),
             "expected the High Blood Pressure (hypertension) condition page")
-    j.check("answer_condition", contains_any(fa, ["high blood pressure", "hypertension", "silent killer"]),
-            f"expected the condition identity (hypertension / high blood pressure); final={fa!r}")
-    j.check("answer_detect", contains_any(fa, ["measurement", "measur", "blood pressure reading",
-                                               "blood pressure check", "monitor", "cuff"]),
-            f"expected the detection method (a simple measurement); final={fa!r}")
+    # The task asks *which* condition this is and how its overview says it can be
+    # detected; the answer does not have to repeat the "silent killer" nickname, but it
+    # must name the condition and must not deny the detection method.
+    j.check("answer_condition", affirmed_any(fa, ["high blood pressure", "hypertension"]),
+            f"expected the condition (high blood pressure / hypertension); final={fa!r}")
+    j.check("answer_detect", pair_affirmed(fa, "detect", "measure")
+            or (affirmed_any(fa, ["measurement", "measur", "monitor", "cuff"])
+                and affirmed_any(fa, ["detect", "check", "reading"])),
+            f"expected the detection method asserted as affirmative; final={fa!r}")
     ok, ev = llm_text_match(fa, "High Blood Pressure (hypertension), the silent killer, detected "
                             "with a simple (blood pressure) measurement",
                             "Which heart condition is the 'silent killer' and how is it detected?")

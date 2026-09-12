@@ -5,7 +5,7 @@ saved list after AND was NOT there initially (proves the agent saved it).
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from verify_lib import (load_run, navigated_to, resolve_db, saved_articles_for, Judge, parse_args, run)
+from verify_lib import (only_affirmative, affirmed_any, final_answer, load_run, navigated_to, resolve_db, saved_articles_for, Judge, parse_args, run)
 
 EMAIL = "alice.j@test.com"
 SLUG = "healthy-eating-guide"
@@ -18,6 +18,11 @@ def main():
     sa = saved_articles_for(after, EMAIL) or []
     si = saved_articles_for(init, EMAIL) or []
     j.check("nav_article", navigated_to(t, f"/article/{SLUG}"), "expected the Healthy Eating guide article")
+    fa = final_answer(t)
+    j.check("answer_affirms_save",
+            affirmed_any(fa, ["saved", "save it", "added to your saved"])
+            and only_affirmative(fa, ["saved"]),
+            f"expected an affirmative report of the save; final={fa!r}")
     j.check("db_saved", SLUG in sa and SLUG not in si,
             f"'{SLUG}' saved after={SLUG in sa}, initial={SLUG in si} (agent must save it)")
     j.check_screenshots(t)

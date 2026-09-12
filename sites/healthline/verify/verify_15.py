@@ -4,20 +4,25 @@ GT: Yes, grapefruit juice IS listed as an interaction.
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from verify_lib import (resolve_db, load_run, final_answer, navigated_to, contains_any, llm_text_match, Judge, parse_args, run)
+from verify_lib import (pair_affirmed, only_affirmative, affirmed_any, token_affirmed, resolve_db, load_run, final_answer, navigated_to, contains_any, llm_text_match, Judge, parse_args, run)
 
 def main():
     a = parse_args(); j = Judge('Healthline--15', a.no_llm)
     t = load_run(a.run_dir); fa = final_answer(t)
     j.check("nav_drug", navigated_to(t, "/drug/atorvastatin"), "expected the atorvastatin drug page")
-    j.check("answer_grapefruit", contains_any(fa, ["grapefruit"]),
-            f"expected mention of grapefruit; final={fa!r}")
-    # answer must affirm it IS an interaction, not deny it
-    affirm = contains_any(fa, ["yes", "is listed", "listed as", "is an interaction", "interacts"])
-    negate = contains_any(fa, ["not", "no ", "no,", "isn't", "without", "absent", "none",
-                               "does not", "doesn't"])
-    j.check("answer_affirms", affirm and not negate,
-            f"answer must affirm grapefruit juice IS an interaction; final={fa!r}")
+    # The mention must be affirmative (a whole-word negator before the phrase disqualifies it)
+    # and the "it IS listed / it IS an interaction" claim must not be negated. Whole-word
+    # matching keeps correct answers containing words such as "Note" or "another" valid, which
+    # the previous substring test wrongly rejected.
+    j.check("answer_grapefruit", token_affirmed(fa, "grapefruit"),
+            f"expected an affirmative mention of grapefruit; final={fa!r}")
+    j.check("answer_affirms",
+            affirmed_any(fa, ["listed", "is an interaction", "interacts"])
+            and only_affirmative(fa, ["grapefruit juice", "grapefruit"]),
+            f"answer must affirm grapefruit juice IS listed as an interaction; final={fa!r}")
+    j.check("answer_not_denied", not pair_affirmed(fa, "grapefruit", "not listed")
+            or affirmed_any(fa, ["listed as an interaction", "is listed"]),
+            f"the answer must not state that grapefruit is not listed; final={fa!r}")
     ok, ev = llm_text_match(fa, "yes — grapefruit juice is listed as an interaction to be aware of for atorvastatin",
                             "Is grapefruit juice listed as an interaction on the atorvastatin page?")
     j.check("answer_consistent", ok, ev, llm=True)

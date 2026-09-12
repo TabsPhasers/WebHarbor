@@ -5,7 +5,7 @@ hypertension); atorvastatin = statin (high cholesterol). Requires opening both d
 """
 import os, sys, re
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from verify_lib import (resolve_db, load_run, final_answer, navigated_to, contains_all, norm, llm_text_match, Judge, parse_args, run)
+from verify_lib import (affirmed_any, pair_affirmed, tokens_affirmed, resolve_db, load_run, final_answer, navigated_to, contains_all, norm, llm_text_match, Judge, parse_args, run)
 
 
 def classes_not_reversed(final):
@@ -25,8 +25,16 @@ def main():
     t = load_run(a.run_dir); fa = final_answer(t)
     j.check("nav_lisinopril", navigated_to(t, "/drug/lisinopril"), "expected the lisinopril page")
     j.check("nav_atorvastatin", navigated_to(t, "/drug/atorvastatin"), "expected the atorvastatin page")
-    j.check("answer_classes", contains_all(fa, ["ACE inhibitor", "statin"]),
-            f"expected both drug classes named; final={fa!r}")
+    j.check("answer_classes", tokens_affirmed(fa, ["ACE inhibitor", "statin"]),
+            f"expected both drug classes named affirmatively; final={fa!r}")
+    j.check("answer_mapping",
+            pair_affirmed(fa, "lisinopril", "ACE inhibitor") and pair_affirmed(fa, "atorvastatin", "statin")
+            and not pair_affirmed(fa, "atorvastatin", "ACE inhibitor")
+            and not pair_affirmed(fa, "lisinopril", "statin"),
+            f"expected lisinopril to be tied to ACE inhibitor and atorvastatin to statin; final={fa!r}")
+    j.check("answer_uses", affirmed_any(fa, ["blood pressure", "hypertension"])
+            and affirmed_any(fa, ["cholesterol"]),
+            f"expected the main use of each drug (blood pressure / cholesterol); final={fa!r}")
     j.check("answer_classes_correct", classes_not_reversed(fa),
             f"expected lisinopril=ACE inhibitor and atorvastatin=statin; final={fa!r}")
     ok, ev = llm_text_match(fa, "lisinopril is the ACE inhibitor (treats high blood pressure); "
