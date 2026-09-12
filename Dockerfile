@@ -50,6 +50,13 @@ RUN python3 /opt/check_asset_inventory.py /opt/WebSyn/walmart_careers && \
 RUN cd /opt/WebSyn/walmart_careers && rm -rf instance instance_seed && \
     PYTHONHASHSEED=0 python seed_data.py && rm -rf instance
 
+# Healthline's downloaded seed carries tracked corrections (image reassignment) and the
+# pinned archive bundles unreferenced images; apply the deterministic migration and prune
+# the unreferenced files before they are shipped.
+RUN cd /opt/WebSyn/healthline && test -f instance_seed/healthline.db && \
+    PYTHONHASHSEED=0 python3 migrate_seed.py && \
+    python3 prune_unreferenced_images.py --apply && rm -rf instance
+
 COPY websyn_start.sh    /opt/websyn_start.sh
 COPY control_server.py  /opt/control_server.py
 COPY site_runner.py     /opt/site_runner.py
