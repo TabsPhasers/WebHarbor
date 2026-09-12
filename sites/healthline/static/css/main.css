@@ -228,3 +228,10 @@ img { max-width: 100%; display: block; }
   .hero-grid, .account-grid { grid-template-columns: 1fr; }
   .hero-main img { height: 240px; }
 }
+
+/* Footer sign-out is a POST form; render its button like the surrounding links. */
+button.linkish {
+  background: none; border: none; padding: 0; margin: 0; font: inherit;
+  color: inherit; cursor: pointer; text-align: left;
+}
+button.linkish:hover { text-decoration: underline; color: var(--hl-teal-dark); }

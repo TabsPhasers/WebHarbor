@@ -80,7 +80,12 @@
             <li><a href="{{ url_for('about') }}">About Healthline</a></li>
             {% if current_user.is_authenticated %}
               <li><a href="{{ url_for('account') }}">My account</a></li>
-              <li><a href="{{ url_for('logout') }}">Sign out</a></li>
+              <li>
+                <form method="post" action="{{ url_for('logout') }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button type="submit" class="linkish">Sign out</button>
+                </form>
+              </li>
             {% else %}
               <li><a href="{{ url_for('login') }}">Sign in</a></li>
               <li><a href="{{ url_for('register') }}">Create account</a></li>

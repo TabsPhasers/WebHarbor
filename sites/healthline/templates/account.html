@@ -12,7 +12,10 @@
     <div style="margin-top:16px; display:flex; flex-direction:column; gap:8px">
       <a class="btn btn-outline" href="{{ url_for('account_edit') }}">Edit profile</a>
       <a class="btn btn-ghost" href="{{ url_for('change_password') }}">Change password</a>
-      <a class="btn btn-ghost" href="{{ url_for('logout') }}">Sign out</a>
+      <form method="post" action="{{ url_for('logout') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-ghost" style="width:100%">Sign out</button>
+      </form>
     </div>
   </aside>
 

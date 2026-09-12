@@ -670,8 +670,10 @@ def register():
     return render_template("register.html")
 
 
-@app.route("/logout")
+@app.route("/logout", methods=["POST"])
 def logout():
+    """Sign out. POST-only: a GET/HEAD must not change authentication state
+    (link prefetchers and crawlers would otherwise sign the user out)."""
     logout_user()
     flash("You have been signed out.", "success")
     return redirect(url_for("index"))
