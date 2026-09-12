@@ -5,8 +5,7 @@ exists after AND not in the initial seed.
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from verify_lib import (load_run, navigated_to, navigated_any, resolve_db, user_exists,
-                        Judge, parse_args)
+from verify_lib import (load_run, navigated_to, navigated_any, resolve_db, user_exists, Judge, parse_args, run)
 
 EMAIL = "myhealth2026@example.com"
 
@@ -21,5 +20,5 @@ def main():
             f"user {EMAIL} after={user_exists(after, EMAIL)} initial={user_exists(init, EMAIL)}")
     j.emit()
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    run(main, 'Healthline--10')

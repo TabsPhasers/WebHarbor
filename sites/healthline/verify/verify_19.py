@@ -6,8 +6,7 @@ that are severe, sudden, or accompanied by fever, stiff neck, confusion, or weak
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from verify_lib import (load_run, final_answer, navigated_to, count_groups, contains_any,
-                        llm_text_match, Judge, parse_args)
+from verify_lib import (load_run, final_answer, navigated_to, count_groups, contains_any, llm_text_match, Judge, parse_args, run)
 
 # each inner list is ONE distinct trigger concept; overlapping tokens count once
 TRIGGER_GROUPS = [["stress"], ["sleep"], ["meal"], ["food", "additive"],
@@ -32,5 +31,5 @@ def main():
     j.check("answer_consistent", ok, ev, llm=True)
     j.emit()
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    run(main, 'Healthline--19')

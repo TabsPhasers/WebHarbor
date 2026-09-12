@@ -5,7 +5,7 @@ its initial value (proves the password was actually updated).
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from verify_lib import (load_run, navigated_to, resolve_db, user_field, Judge, parse_args)
+from verify_lib import (load_run, navigated_to, resolve_db, user_field, Judge, parse_args, run)
 
 EMAIL = "carol.d@test.com"
 
@@ -21,5 +21,5 @@ def main():
             f"carol's password_hash must change (initial != after)")
     j.emit()
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    run(main, 'Healthline--18')

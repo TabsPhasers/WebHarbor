@@ -5,8 +5,7 @@ hypertension); atorvastatin = statin (high cholesterol). Requires opening both d
 """
 import os, sys, re
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from verify_lib import (load_run, final_answer, navigated_to, contains_all, norm,
-                        llm_text_match, Judge, parse_args)
+from verify_lib import (load_run, final_answer, navigated_to, contains_all, norm, llm_text_match, Judge, parse_args, run)
 
 
 def classes_not_reversed(final):
@@ -36,5 +35,5 @@ def main():
     j.check("answer_consistent", ok, ev, llm=True)
     j.emit()
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    run(main, 'Healthline--16')

@@ -5,8 +5,7 @@ nav /history + answer names the section, cross-checked against the DB.
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from verify_lib import (load_run, final_answer, navigated_any, contains_any,
-                        resolve_db, reading_history_for, Judge, parse_args)
+from verify_lib import (load_run, final_answer, navigated_any, contains_any, resolve_db, reading_history_for, Judge, parse_args, run)
 
 EMAIL = "bob.c@test.com"
 
@@ -26,5 +25,5 @@ def main():
             f"expected the Health Conditions section; final={fa!r}")
     j.emit()
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    run(main, 'Healthline--14')

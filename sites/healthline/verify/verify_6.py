@@ -4,8 +4,7 @@ GT: 5 (pre-seeded). Deterministic: nav /saved + answer count cross-checked again
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from verify_lib import (load_run, final_answer, navigated_any, number_mentioned,
-                        resolve_db, saved_articles_for, Judge, parse_args)
+from verify_lib import (load_run, final_answer, navigated_any, number_mentioned, resolve_db, saved_articles_for, Judge, parse_args, run)
 
 EMAIL = "alice.j@test.com"
 
@@ -22,5 +21,5 @@ def main():
             f"expected saved count from DB; db_available={saved is not None}; final={fa!r}")
     j.emit()
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    run(main, 'Healthline--6')

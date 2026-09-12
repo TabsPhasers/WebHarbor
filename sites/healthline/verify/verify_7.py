@@ -5,7 +5,7 @@ saved list after AND was NOT there initially (proves the agent saved it).
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from verify_lib import (load_run, navigated_to, resolve_db, saved_articles_for, Judge, parse_args)
+from verify_lib import (load_run, navigated_to, resolve_db, saved_articles_for, Judge, parse_args, run)
 
 EMAIL = "alice.j@test.com"
 SLUG = "healthy-eating-guide"
@@ -22,5 +22,5 @@ def main():
             f"'{SLUG}' saved after={SLUG in sa}, initial={SLUG in si} (agent must save it)")
     j.emit()
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    run(main, 'Healthline--7')

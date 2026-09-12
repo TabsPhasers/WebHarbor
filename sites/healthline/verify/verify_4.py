@@ -4,8 +4,7 @@ GT: 30 minutes. (Disambiguation: 'benefits-of-walking', not the walking-blood-su
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from verify_lib import (load_run, final_answer, navigated_to, number_mentioned,
-                        llm_text_match, Judge, parse_args)
+from verify_lib import (load_run, final_answer, navigated_to, number_mentioned, llm_text_match, Judge, parse_args, run)
 
 def main():
     a = parse_args(); j = Judge('Healthline--4', a.no_llm)
@@ -18,5 +17,5 @@ def main():
     j.check("answer_consistent", ok, ev, llm=True)
     j.emit()
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    run(main, 'Healthline--4')
