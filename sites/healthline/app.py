@@ -20,6 +20,7 @@ import secrets
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from email_validator import EmailNotValidError, validate_email
 from flask import (
     Flask, render_template, request, redirect, url_for, flash, abort
 )
@@ -51,6 +52,32 @@ login_manager.login_message = "Please sign in to continue."
 csrf = CSRFProtect(app)
 
 REF_DATE = SD.MIRROR_REFERENCE_DATE
+
+# ---------------------------------------------------------------- input bounds
+# SQLite does not enforce VARCHAR widths, so the application layer bounds every
+# user-supplied string. The limits mirror the model column widths below.
+MAX_EMAIL = 200        # users.email VARCHAR(200)
+MAX_USERNAME = 80      # users.username VARCHAR(80)
+MAX_FULL_NAME = 200    # users.full_name VARCHAR(200)
+MAX_LOCATION = 120     # users.location VARCHAR(120)
+MAX_BIO = 2000
+MAX_PASSWORD = 128
+MAX_SEARCH_QUERY = 200
+
+
+def clean_email(raw):
+    """Normalize and validate an e-mail address; return None when unusable.
+
+    ``test_environment=True`` keeps RFC 6761 special-use names (.test/.example/
+    .invalid/.localhost) acceptable, which the offline benchmark accounts need.
+    """
+    text = (raw or "").strip()
+    if not text or len(text) > MAX_EMAIL:
+        return None
+    try:
+        return validate_email(text, test_environment=True).normalized.lower()
+    except EmailNotValidError:
+        return None
 
 
 # =======================================================================
@@ -629,6 +656,9 @@ def login():
     if request.method == "POST":
         email = (request.form.get("email") or "").strip().lower()
         password = request.form.get("password") or ""
+        if len(email) > MAX_EMAIL or len(password) > MAX_PASSWORD:
+            flash("Invalid email or password.", "error")
+            return render_template("login.html"), 400
         user = User.query.filter_by(email=email).first()
         if user and user.check_password(password):
             login_user(user)
@@ -650,7 +680,17 @@ def register():
         confirm = request.form.get("confirm_password") or ""
         if not (email and username and password):
             flash("Email, username, and password are all required.", "error")
-            return render_template("register.html")
+            return render_template("register.html"), 400
+        if not clean_email(email):
+            flash("Enter a valid email address.", "error")
+            return render_template("register.html"), 400
+        email = clean_email(email)
+        if len(username) > MAX_USERNAME or len(full_name) > MAX_FULL_NAME:
+            flash("Username or full name is too long.", "error")
+            return render_template("register.html"), 400
+        if len(password) > MAX_PASSWORD:
+            flash("Password is too long.", "error")
+            return render_template("register.html"), 400
         if password != confirm:
             flash("Passwords do not match.", "error")
             return render_template("register.html")
@@ -697,9 +737,15 @@ def account():
 @login_required
 def account_edit():
     if request.method == "POST":
-        current_user.full_name = (request.form.get("full_name") or "").strip()
-        current_user.location = (request.form.get("location") or "").strip()
-        current_user.bio = (request.form.get("bio") or "").strip()
+        full_name = (request.form.get("full_name") or "").strip()
+        location = (request.form.get("location") or "").strip()
+        bio = (request.form.get("bio") or "").strip()
+        if len(full_name) > MAX_FULL_NAME or len(location) > MAX_LOCATION or len(bio) > MAX_BIO:
+            flash("Profile field is too long.", "error")
+            return render_template("account_edit.html"), 400
+        current_user.full_name = full_name
+        current_user.location = location
+        current_user.bio = bio
         current_user.newsletter = request.form.get("newsletter") == "on"
         db.session.commit()
         flash("Profile updated.", "success")
@@ -720,6 +766,8 @@ def change_password():
             flash("New passwords do not match.", "error")
         elif len(new) < 6:
             flash("Password must be at least 6 characters.", "error")
+        elif len(new) > MAX_PASSWORD:
+            flash("Password is too long.", "error")
         else:
             current_user.set_password(new)
             db.session.commit()
