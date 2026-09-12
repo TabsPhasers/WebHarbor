@@ -16,6 +16,7 @@ content is defined in seed_data.py (Python data, no runtime JSON dependency).
 """
 import os
 import re
+import secrets
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -37,7 +38,7 @@ DB_DIR = BASE_DIR / "instance"
 DB_DIR.mkdir(exist_ok=True)
 
 app = Flask(__name__)
-app.config["SECRET_KEY"] = "healthline-mirror-secret-key-change-in-prod-1602"
+app.config["SECRET_KEY"] = os.environ.get("HEALTHLINE_SECRET_KEY") or secrets.token_hex(32)
 app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DB_DIR / 'healthline.db'}"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["WTF_CSRF_TIME_LIMIT"] = None
