@@ -5,9 +5,15 @@
 # is a git revision (branch name like `main`, a tag, or a specific commit
 # sha). Override at runtime with the ASSETS_REVISION env var.
 repo: ChilleD/WebHarbor
-# Pinned to HF PR #40 (adds healthline.tar.gz on top of current main) so this
-# PR builds end-to-end before the assets PR is merged. This ref contains all
-# 17 site tarballs. Maintainer: once
-# https://huggingface.co/datasets/ChilleD/WebHarbor/discussions/40 is merged,
-# bump this to the merged commit SHA on main.
-revision: refs/pr/40
+# Immutable commit sha (not a ref) so the archive bytes cannot move.
+# It is the resolved commit of HF PR #70
+# (https://huggingface.co/datasets/ChilleD/WebHarbor/discussions/70), which adds
+# healthline.tar.gz on top of the dataset main branch and supersedes the closed
+# HF PR #40.
+#
+# BLOCKER: this sha is NOT the dataset main head yet — HF PR #70 is still open,
+# so healthline.tar.gz is not merged into the dataset. Release condition: after
+# PR #70 is merged, bump this to the merged commit sha on main and re-run
+# scripts/fetch_assets.sh; healthline.tar.gz sha256 must remain
+# e0a212efecae1cc93882d8692889ecc8d5642804032a54c1a6622aec02f6081b (size 12393920).
+revision: e168da1bb117a66b27a778fb73889be7cd84c40f
