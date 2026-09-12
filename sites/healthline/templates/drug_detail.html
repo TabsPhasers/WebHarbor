@@ -54,7 +54,7 @@
   <h2>Other {{ drug.category }}</h2>
   <ul>
     {% for d in related %}
-    <li><a href="{{ url_for('drug_detail', slug=d.slug) }}">{{ d.name }}</a> — {{ d.drug_class }}</li>
+    <li><a href="{{ url_for('drug_detail', slug=d.slug) }}">{{ d.name }}</a></li>
     {% endfor %}
   </ul>
 </div>

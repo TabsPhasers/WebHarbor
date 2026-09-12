@@ -33,7 +33,9 @@
       <img src="{{ url_for('static', filename='images/' ~ d.image) }}" alt="{{ d.name }}">
     </a>
     <div class="card-body">
-      <div class="cat">{{ d.drug_class }}</div>
+      {# card kicker shows the therapeutic category, never drug_class: the class of
+         lisinopril vs atorvastatin is the answer to task Healthline--16 #}
+      <div class="cat">{{ d.category }}</div>
       <h3><a href="{{ url_for('drug_detail', slug=d.slug) }}">{{ d.name }}</a></h3>
       <p>Generic: {{ d.generic_name }}</p>
     </div>
