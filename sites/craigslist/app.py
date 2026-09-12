@@ -469,7 +469,10 @@ def account():
     posts = Listing.query.filter_by(owner_id=current_user.id).order_by(Listing.posted_at.desc()).all()
     searches = SavedSearch.query.filter_by(user_id=current_user.id).order_by(SavedSearch.created_at.desc()).all()
     messages = Message.query.filter_by(user_id=current_user.id).order_by(Message.created_at.desc()).limit(5).all()
-    return render_template("account.html", posts=posts, searches=searches, messages=messages)
+    hidden = (Listing.query.join(HiddenListing, HiddenListing.listing_id == Listing.id)
+              .filter(HiddenListing.user_id == current_user.id)
+              .order_by(Listing.title).all())
+    return render_template("account.html", posts=posts, searches=searches, messages=messages, hidden=hidden)
 
 
 @app.route("/account/edit", methods=["GET", "POST"])
@@ -552,6 +555,19 @@ def hide_listing(listing_id):
         session["hidden_listing_ids"] = sorted(ids)
     flash("listing hidden", "info")
     return redirect(request.form.get("next") or url_for("search"))
+
+
+@app.route("/listing/<int:listing_id>/unhide", methods=["POST"])
+def unhide_listing(listing_id):
+    if current_user.is_authenticated:
+        HiddenListing.query.filter_by(user_id=current_user.id, listing_id=listing_id).delete()
+        db.session.commit()
+    else:
+        ids = set(session.get("hidden_listing_ids", []))
+        ids.discard(listing_id)
+        session["hidden_listing_ids"] = sorted(ids)
+    flash("listing unhidden", "info")
+    return redirect(request.form.get("next") or url_for("account"))
 
 
 @app.route("/listing/<int:listing_id>/flag", methods=["POST"])

@@ -9,12 +9,12 @@
     <label>category</label>
     <select name="category_slug" required>
       {% for cat in categories %}
-      <option value="{{ cat.slug }}">{{ cat.group_name }} / {{ cat.name }}</option>
+      <option value="{{ cat.slug }}" data-group="{{ cat.group_slug }}">{{ cat.group_name }} / {{ cat.name }}</option>
       {% endfor %}
     </select>
     <label>posting title</label>
     <input name="title" required placeholder="short descriptive title">
-    <div class="form-row">
+    <div class="form-row" data-groups="for_sale housing">
       <div>
         <label>price</label>
         <input name="price" inputmode="numeric">
@@ -48,7 +48,7 @@
         <input name="neighborhood" placeholder="e.g. berkeley">
       </div>
     </div>
-    <div class="form-row">
+    <div class="form-row" data-groups="housing">
       <div>
         <label>bedrooms</label>
         <input name="bedrooms" inputmode="numeric">
@@ -58,20 +58,38 @@
         <input name="sqft" inputmode="numeric">
       </div>
     </div>
-    <label>compensation or company</label>
-    <input name="compensation" placeholder="$28/hr, $155k-$180k, etc.">
-    <input name="company" placeholder="company name">
-    <label>employment type</label>
-    <select name="employment_type">
-      <option value="">not applicable</option>
-      <option>full-time</option>
-      <option>part-time</option>
-      <option>contract</option>
-      <option>temporary</option>
-    </select>
+    <div data-groups="jobs">
+      <label>compensation or company</label>
+      <input name="compensation" placeholder="$28/hr, $155k-$180k, etc.">
+      <input name="company" placeholder="company name">
+      <label>employment type</label>
+      <select name="employment_type">
+        <option value="">not applicable</option>
+        <option>full-time</option>
+        <option>part-time</option>
+        <option>contract</option>
+        <option>temporary</option>
+      </select>
+    </div>
     <label>posting body</label>
     <textarea name="description" rows="9" required></textarea>
     <button type="submit">publish</button>
   </form>
 </div>
+<script>
+(function () {
+  var sel = document.querySelector('select[name="category_slug"]');
+  if (!sel) return;
+  function sync() {
+    var opt = sel.options[sel.selectedIndex];
+    var group = opt ? (opt.getAttribute('data-group') || '') : '';
+    document.querySelectorAll('[data-groups]').forEach(function (el) {
+      var groups = (el.getAttribute('data-groups') || '').split(' ');
+      el.style.display = groups.indexOf(group) >= 0 ? '' : 'none';
+    });
+  }
+  sel.addEventListener('change', sync);
+  sync();
+})();
+</script>
 {% endblock %}

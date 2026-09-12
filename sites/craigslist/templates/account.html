@@ -5,7 +5,7 @@
 <div class="account-shell">
   <nav class="account-tabs">
     <a class="active" href="{{ url_for('account') }}">account home</a>
-    <a href="{{ url_for('saved') }}">favorites</a>
+    <a href="{{ url_for('saved') }}">saved</a>
     <a href="{{ url_for('messages') }}">messages</a>
     <a href="{{ url_for('post_listing') }}">new posting</a>
   </nav>
@@ -49,6 +49,22 @@
     </ul>
     {% else %}
     <p class="muted">no saved searches</p>
+    {% endif %}
+  </section>
+
+  <section class="panel">
+    <h2>hidden listings</h2>
+    {% if hidden %}
+    <ul class="compact-list">
+      {% for h in hidden %}
+      <li>
+        <a href="{{ url_for('listing_detail', slug=h.slug, listing_id=h.id) }}">{{ h.title }}</a>
+        <form method="post" action="{{ url_for('unhide_listing', listing_id=h.id) }}"><input type="hidden" name="next" value="{{ url_for('account') }}"><button class="plain-button">unhide</button></form>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted">no hidden listings</p>
     {% endif %}
   </section>
 
