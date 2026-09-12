@@ -418,6 +418,12 @@ def inject_globals():
     )
 
 
+def invalid_request(message):
+    """Reject malformed query parameters with 400 instead of silently substituting
+    a default or an empty result set."""
+    abort(400, description=message)
+
+
 def get_section_or_404(slug):
     s = Section.query.filter_by(slug=slug).first()
     if not s:
@@ -491,10 +497,19 @@ def index():
 @app.route("/section/<slug>")
 def section_page(slug):
     section = get_section_or_404(slug)
-    page = max(1, request.args.get("page", 1, type=int))
     per_page = 9
+    raw_page = request.args.get("page")
+    if raw_page is not None and not re.fullmatch(r"\d+", raw_page.strip()):
+        invalid_request("page must be a positive integer")
+    page = int(raw_page) if raw_page else 1
+    if page < 1:
+        invalid_request("page must be a positive integer")
     sub = (request.args.get("sub") or "").strip()
     sort = request.args.get("sort", "latest")
+    if sort not in ("latest", "popular", "az"):
+        invalid_request("sort must be one of latest, popular, az")
+    if sub and sub.lower() not in [x.lower() for x in section.subcategories]:
+        invalid_request(f"{sub!r} is not a subcategory of {section.name}")
 
     q = Article.query.filter_by(section_slug=slug)
     if sub:
@@ -508,6 +523,9 @@ def section_page(slug):
         q = q.order_by(Article.updated_at.desc())
 
     total = q.count()
+    pages = (total + per_page - 1) // per_page
+    if total and page > pages:
+        invalid_request(f"page {page} is beyond the last page ({pages})")
     articles = q.offset((page - 1) * per_page).limit(per_page).all()
     return render_template("section.html", section=section, articles=articles,
                            total=total, page=page, per_page=per_page,
@@ -559,6 +577,9 @@ def record_article_view(slug):
 @app.route("/conditions")
 def conditions_index():
     cat = (request.args.get("category") or "").strip()
+    known = {c.category for c in Condition.query.all() if c.category}
+    if cat and cat.lower() not in {k.lower() for k in known}:
+        invalid_request(f"{cat!r} is not a known condition category")
     q = Condition.query
     if cat:
         q = q.filter(Condition.category.ilike(cat))
@@ -582,6 +603,12 @@ def condition_detail(slug):
 def drugs_index():
     cat = (request.args.get("category") or "").strip()
     letter = (request.args.get("letter") or "").strip().upper()
+    known_cats = {d.category for d in Drug.query.all() if d.category}
+    known_letters = {d.name[0].upper() for d in Drug.query.all() if d.name}
+    if cat and cat.lower() not in {k.lower() for k in known_cats}:
+        invalid_request(f"{cat!r} is not a known drug category")
+    if letter and letter not in known_letters:
+        invalid_request(f"no medication name starts with {letter!r}")
     q = Drug.query
     if cat:
         q = q.filter(Drug.category.ilike(cat))
@@ -617,6 +644,10 @@ def author_detail(key):
 def search():
     q = (request.args.get("q") or "").strip()
     scope = request.args.get("type", "all")  # all | articles | conditions | drugs
+    if scope not in ("all", "articles", "conditions", "drugs"):
+        invalid_request("type must be one of all, articles, conditions, drugs")
+    if len(q) > MAX_SEARCH_QUERY:
+        invalid_request(f"search query is limited to {MAX_SEARCH_QUERY} characters")
     article_results = []
     condition_results = []
     drug_results = []
