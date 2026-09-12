@@ -256,6 +256,11 @@ img { max-width: 100%; display: block; }
   .account-grid { gap: 18px; }
   .page-head h1 { font-size: 24px; }
   .spec-table th { width: auto; }
+  .detail-head { flex-direction: column; gap: 12px; }
+  .detail-head > div { min-width: 0; }
+  .detail-head h1 { font-size: 26px; }
+  /* long single words (e.g. "hydrochlorothiazide") must not force a horizontal scroll */
+  .detail-head h1, .detail-head p, .article-wrap h1 { overflow-wrap: anywhere; }
   .detail-head img { width: 100%; height: auto; }
 }
 
