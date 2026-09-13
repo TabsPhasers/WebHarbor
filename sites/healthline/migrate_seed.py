@@ -75,7 +75,9 @@ def planned_image_edits(db_path: Path):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument('--db', default=os.environ.get('HEALTHLINE_SEED_DB', str(DEFAULT_DB)))
+    # scripts/fetch_assets.sh runs `migrate_seed.py <seed db>` for every site that
+    # ships a migrator; accept that positional path as well as --db.
+    ap.add_argument('db', nargs='?', default=os.environ.get('HEALTHLINE_SEED_DB', str(DEFAULT_DB)))
     ap.add_argument('--check', action='store_true')
     args = ap.parse_args()
 
